@@ -26,10 +26,13 @@ export default function App() {
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map())
   const [names, setNames] = useState<Map<string, string>>(new Map())
   const [messages, setMessages] = useState<ChatEntry[]>([])
+  const [screenSharing, setScreenSharing] = useState(false)
 
   const clientRef = useRef<SignalingClient | null>(null)
   const roomRef = useRef<WebRtcRoom | null>(null)
   const selfIdRef = useRef<string>(crypto.randomUUID())
+  const cameraStreamRef = useRef<MediaStream | null>(null)
+  const screenStreamRef = useRef<MediaStream | null>(null)
 
   /** Resolves a peer id to its display name, falling back to a short id. */
   const nameOf = (peerId: string) => names.get(peerId) ?? peerId.slice(0, 8)
@@ -45,6 +48,7 @@ export default function App() {
     setError(null)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      cameraStreamRef.current = stream
       setLocalStream(stream)
 
       const client = new SignalingClient(defaultSignalingUrl())
@@ -109,15 +113,48 @@ export default function App() {
   const leave = useCallback(() => {
     roomRef.current?.leave(room)
     clientRef.current?.close()
-    localStream?.getTracks().forEach((track) => track.stop())
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop())
     roomRef.current = null
     clientRef.current = null
+    cameraStreamRef.current = null
+    screenStreamRef.current = null
     setLocalStream(null)
     setRemoteStreams(new Map())
     setNames(new Map())
     setMessages([])
+    setScreenSharing(false)
     setStatus('idle')
-  }, [room, localStream])
+  }, [room])
+
+  const stopScreenShare = useCallback(() => {
+    const camera = cameraStreamRef.current
+    if (roomRef.current && camera?.getVideoTracks()[0]) {
+      void roomRef.current.replaceVideoTrack(camera.getVideoTracks()[0])
+    }
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop())
+    screenStreamRef.current = null
+    setLocalStream(camera)
+    setScreenSharing(false)
+  }, [])
+
+  const startScreenShare = useCallback(async () => {
+    try {
+      const screen = await navigator.mediaDevices.getDisplayMedia({ video: true })
+      const screenTrack = screen.getVideoTracks()[0]
+      if (!screenTrack || !roomRef.current) return
+      await roomRef.current.replaceVideoTrack(screenTrack)
+      screenStreamRef.current = screen
+      setLocalStream(screen)
+      setScreenSharing(true)
+      // The browser's own "stop sharing" control ends the track — revert when it does.
+      screenTrack.onended = () => stopScreenShare()
+    } catch (e) {
+      // getDisplayMedia rejects if the user cancels the picker; that is not an error.
+      if (e instanceof DOMException && e.name === 'NotAllowedError') return
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }, [stopScreenShare])
 
   const sendChat = useCallback(
     (text: string) => {
@@ -157,7 +194,15 @@ export default function App() {
           />
         </label>
         {status === 'in-room' ? (
-          <button onClick={leave}>離開房間</button>
+          <>
+            <button
+              className="btn-secondary"
+              onClick={screenSharing ? stopScreenShare : startScreenShare}
+            >
+              {screenSharing ? '停止分享' : '分享螢幕'}
+            </button>
+            <button onClick={leave}>離開房間</button>
+          </>
         ) : (
           <button onClick={join} disabled={status === 'connecting' || !room.trim()}>
             {status === 'connecting' ? '連線中…' : '加入房間'}
@@ -170,7 +215,11 @@ export default function App() {
       <section className="workspace">
         <div className="video-grid">
           {localStream && (
-            <VideoTile label={`${name.trim() || '你'}(你)`} stream={localStream} muted />
+            <VideoTile
+              label={`${name.trim() || '你'}(你${screenSharing ? '・分享中' : ''})`}
+              stream={localStream}
+              muted
+            />
           )}
           {[...remoteStreams].map(([peerId, stream]) => (
             <VideoTile key={peerId} label={nameOf(peerId)} stream={stream} />

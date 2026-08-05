@@ -21,13 +21,37 @@ export interface WebRtcRoomEvents {
 export class WebRtcRoom {
   private readonly peers = new Map<string, RTCPeerConnection>()
 
+  /** The original camera video track — kept so screen sharing can be reverted. */
+  readonly cameraVideoTrack: MediaStreamTrack | null
+
+  /** The video track currently sent to peers (camera or screen). */
+  private activeVideoTrack: MediaStreamTrack | null
+
   constructor(
     private readonly signaling: SignalingClient,
     private readonly selfId: string,
     private readonly localStream: MediaStream,
     private readonly events: WebRtcRoomEvents,
     private readonly iceServers: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }],
-  ) {}
+  ) {
+    this.cameraVideoTrack = localStream.getVideoTracks()[0] ?? null
+    this.activeVideoTrack = this.cameraVideoTrack
+  }
+
+  /**
+   * Swaps the outgoing video track on every peer connection without renegotiation
+   * (e.g. camera → screen share and back). New peers that join afterwards receive
+   * whatever track is active at that time.
+   */
+  async replaceVideoTrack(track: MediaStreamTrack): Promise<void> {
+    this.activeVideoTrack = track
+    await Promise.all(
+      [...this.peers.values()].map((pc) => {
+        const sender = pc.getSenders().find((s) => s.track?.kind === 'video')
+        return sender ? sender.replaceTrack(track) : Promise.resolve()
+      }),
+    )
+  }
 
   /** Wires up signaling handlers and announces our arrival in the room under {@code displayName}. */
   join(room: string, displayName: string): void {
@@ -106,7 +130,12 @@ export class WebRtcRoom {
     if (existing) return existing
 
     const pc = new RTCPeerConnection({ iceServers: this.iceServers })
-    this.localStream.getTracks().forEach((track) => pc.addTrack(track, this.localStream))
+    // Audio always comes from the mic; video is whatever is currently active
+    // (camera or an in-progress screen share).
+    this.localStream.getAudioTracks().forEach((track) => pc.addTrack(track, this.localStream))
+    if (this.activeVideoTrack) {
+      pc.addTrack(this.activeVideoTrack, this.localStream)
+    }
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {

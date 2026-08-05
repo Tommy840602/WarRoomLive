@@ -53,6 +53,10 @@
   cursor: not-allowed;
 }
 
+.app__controls .btn-secondary {
+  background: #2f3846;
+}
+
 .app__error {
   color: #f87171;
   background: #2a1416;
