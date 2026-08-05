@@ -13,6 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `README.md` — architecture diagram and run instructions (keep in sync with this file).
 - `AGENTS.md`, `.github/agents/` — workspace agent conventions.
 - `.github/workflows/ci.yml` — CI: runs `mvn verify` (backend) and `npm ci && npm run build` (frontend) on push/PR to `main`. Keep the toolchain versions here in step with the Java/Node versions above.
+- `docker-compose.yml` + `backend/Dockerfile` + `frontend/Dockerfile` (nginx, `frontend/nginx.conf`) — full-stack deploy (`docker compose up --build`, opens on `:8088`). The frontend nginx reverse-proxies `/api` and `/ws` to `backend:8080`, so the browser uses a single origin; the backend runs the `postgres` profile against the `db` service. CI does not build images — verify Docker changes by running the stack.
 
 ## Commands
 

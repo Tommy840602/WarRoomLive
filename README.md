@@ -28,7 +28,22 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
   - 預設(無 profile):記憶體環形緩衝(每房最近 `warroomlive.chat.history-limit` 則,預設 100),零依賴,伺服器重啟後消失。
   - `postgres` profile:Spring Data JPA + PostgreSQL,跨重啟耐久。啟用:`SPRING_PROFILES_ACTIVE=postgres`,並提供 `DB_URL` / `DB_USER` / `DB_PASSWORD`。
 
-## 使用 PostgreSQL 持久化(選用)
+## Docker 部署(完整 stack)
+
+一鍵啟動 Postgres + 後端 + 前端(nginx),讓別人能實際連上:
+
+```bash
+docker compose up --build
+# 開啟 http://localhost:8088(埠可用 FRONTEND_PORT 覆寫,如 FRONTEND_PORT=8091 docker compose up)
+```
+
+- `frontend`(nginx):服務前端靜態檔,並把 `/api` 與 `/ws`(含 WebSocket upgrade)反向代理到 `backend`,所以瀏覽器只需連前端這一個 origin。
+- `backend`:以 `postgres` profile 執行,資料源指向 `db` 服務。
+- `db`:PostgreSQL,資料存於具名 volume `pgdata`(`docker compose down -v` 才會清除)。
+
+> 前端使用相對路徑與 `window.location.host` 組出 WebSocket URL,因此不論部署在哪個網域/埠都不需改設定。若要對外公開,建議在前面再加一層 HTTPS(TLS 終結),並把 `WARROOMLIVE_SIGNALING_ALLOWED_ORIGINS` 收斂成實際網域。
+
+## 使用 PostgreSQL 持久化(選用,直接跑後端)
 
 ```bash
 docker run -d --name wrl-pg -e POSTGRES_USER=warroomlive -e POSTGRES_PASSWORD=warroomlive \
