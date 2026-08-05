@@ -1,0 +1,93 @@
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+.app__header h1 {
+  margin: 0;
+  font-size: 1.8rem;
+}
+
+.app__subtitle {
+  margin: 0.25rem 0 1.5rem;
+  color: #9aa0a6;
+}
+
+.app__controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.app__controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: #9aa0a6;
+}
+
+.app__controls input {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #2a2f38;
+  border-radius: 6px;
+  background: #171a21;
+  color: inherit;
+  font-size: 1rem;
+}
+
+.app__controls button {
+  padding: 0.55rem 1.1rem;
+  border: none;
+  border-radius: 6px;
+  background: #3b82f6;
+  color: white;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.app__controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.app__error {
+  color: #f87171;
+  background: #2a1416;
+  padding: 0.6rem 0.9rem;
+  border-radius: 6px;
+}
+
+.video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.video-tile {
+  margin: 0;
+  position: relative;
+  background: #000;
+  border-radius: 10px;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+}
+
+.video-tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.video-tile figcaption {
+  position: absolute;
+  left: 0.5rem;
+  bottom: 0.5rem;
+  padding: 0.15rem 0.5rem;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+  font-size: 0.8rem;
+}

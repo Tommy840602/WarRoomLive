@@ -1,0 +1,19 @@
+# --- Java / Maven (backend) ---
+backend/target/
+*.class
+
+# --- Node / Vite (frontend) ---
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# --- Logs & env ---
+*.log
+.env
+.env.local
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+*.iml
+.vscode/

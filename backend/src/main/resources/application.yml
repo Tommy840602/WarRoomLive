@@ -1,0 +1,16 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: warroomlive-backend
+
+warroomlive:
+  signaling:
+    # Comma-separated list of allowed origins for the WebSocket handshake.
+    # "*" is convenient for local development; lock this down per environment.
+    allowed-origins: "*"
+
+logging:
+  level:
+    com.warroomlive: INFO
