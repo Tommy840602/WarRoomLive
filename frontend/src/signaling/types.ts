@@ -9,6 +9,8 @@ export type SignalType =
   | 'candidate'
   | 'chat'
   | 'state'
+  | 'reaction'
+  | 'hand'
   | 'peers'
   | 'peer-joined'
   | 'peer-left'

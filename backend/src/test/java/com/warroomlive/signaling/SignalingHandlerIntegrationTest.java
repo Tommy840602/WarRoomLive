@@ -99,6 +99,14 @@ class SignalingHandlerIntegrationTest {
         assertThat(state.payload().get("audio").asBoolean()).isFalse();
         assertThat(state.payload().get("video").asBoolean()).isTrue();
 
+        // An emoji reaction from Alice is broadcast to Bob.
+        aliceSession.sendMessage(text(new SignalMessage(
+                "reaction", "room-1", "alice", null, mapper.valueToTree("🎉"))));
+        SignalMessage reaction = bob.take();
+        assertThat(reaction.type()).isEqualTo("reaction");
+        assertThat(reaction.from()).isEqualTo("alice");
+        assertThat(mapper.convertValue(reaction.payload(), String.class)).isEqualTo("🎉");
+
         // When Alice disconnects, Bob is told she left.
         aliceSession.close(CloseStatus.NORMAL);
         SignalMessage bobNotice = bob.take();
