@@ -17,6 +17,7 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
 ```
 
 - **Signaling 伺服器不碰媒體**:只轉發 SDP offer/answer 與 ICE candidate,並廣播房間成員變化。
+- **文字聊天**共用同一條 signaling WebSocket(`chat` 訊息類型),伺服器廣播給房間內其他人,發送者在本地端顯示自己的訊息。
 - **Full mesh 拓撲**:每個參與者與其他人各建立一條 `RTCPeerConnection`。小群組(約 6–8 人內)最簡單、延遲最低;規模再大時應改用 SFU。
 - 開發時前端 Vite dev server 會把 `/api` 與 `/ws` 代理到後端 `:8080`,瀏覽器只需與 `:5173` 溝通。
 

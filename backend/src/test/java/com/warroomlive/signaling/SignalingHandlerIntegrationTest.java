@@ -75,6 +75,14 @@ class SignalingHandlerIntegrationTest {
         assertThat(relayed.from()).isEqualTo("alice");
         assertThat(mapper.convertValue(relayed.payload(), String.class)).isEqualTo("sdp-blob");
 
+        // Chat from Alice is broadcast to Bob (but not echoed back to Alice).
+        aliceSession.sendMessage(text(new SignalMessage(
+                "chat", "room-1", "alice", null, mapper.valueToTree("hello team"))));
+        SignalMessage chat = bob.take();
+        assertThat(chat.type()).isEqualTo("chat");
+        assertThat(chat.from()).isEqualTo("alice");
+        assertThat(mapper.convertValue(chat.payload(), String.class)).isEqualTo("hello team");
+
         // When Alice disconnects, Bob is told she left.
         aliceSession.close(CloseStatus.NORMAL);
         SignalMessage bobNotice = bob.take();

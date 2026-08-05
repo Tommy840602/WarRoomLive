@@ -7,6 +7,7 @@ export type SignalType =
   | 'offer'
   | 'answer'
   | 'candidate'
+  | 'chat'
   | 'peers'
   | 'peer-joined'
   | 'peer-left'

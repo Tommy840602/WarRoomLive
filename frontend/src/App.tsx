@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react'
 import { SignalingClient, defaultSignalingUrl } from './signaling/SignalingClient'
 import { WebRtcRoom } from './webrtc/WebRtcRoom'
 import { VideoTile } from './components/VideoTile'
+import { ChatPanel, type ChatMessage } from './components/ChatPanel'
 import './App.css'
 
 type Status = 'idle' | 'connecting' | 'in-room' | 'error'
@@ -12,6 +13,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map())
+  const [messages, setMessages] = useState<ChatMessage[]>([])
 
   const clientRef = useRef<SignalingClient | null>(null)
   const roomRef = useRef<WebRtcRoom | null>(null)
@@ -27,6 +29,19 @@ export default function App() {
       const client = new SignalingClient(defaultSignalingUrl())
       await client.connect()
       clientRef.current = client
+
+      // Chat rides the same signaling socket, independent of the WebRTC mesh.
+      client.on('chat', (msg) =>
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            from: (msg.from ?? 'unknown').slice(0, 8),
+            text: String(msg.payload),
+            mine: false,
+          },
+        ]),
+      )
 
       const webRtcRoom = new WebRtcRoom(client, selfIdRef.current, stream, {
         onRemoteStream: (peerId, remote) =>
@@ -56,8 +71,21 @@ export default function App() {
     clientRef.current = null
     setLocalStream(null)
     setRemoteStreams(new Map())
+    setMessages([])
     setStatus('idle')
   }, [room, localStream])
+
+  const sendChat = useCallback(
+    (text: string) => {
+      clientRef.current?.send({ type: 'chat', room, from: selfIdRef.current, payload: text })
+      // The server broadcasts only to others, so echo our own message locally.
+      setMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), from: '你', text, mine: true },
+      ])
+    },
+    [room],
+  )
 
   return (
     <main className="app">
@@ -86,11 +114,14 @@ export default function App() {
 
       {error && <p className="app__error">⚠️ {error}</p>}
 
-      <section className="video-grid">
-        {localStream && <VideoTile label="你" stream={localStream} muted />}
-        {[...remoteStreams].map(([peerId, stream]) => (
-          <VideoTile key={peerId} label={peerId.slice(0, 8)} stream={stream} />
-        ))}
+      <section className="workspace">
+        <div className="video-grid">
+          {localStream && <VideoTile label="你" stream={localStream} muted />}
+          {[...remoteStreams].map(([peerId, stream]) => (
+            <VideoTile key={peerId} label={peerId.slice(0, 8)} stream={stream} />
+          ))}
+        </div>
+        <ChatPanel messages={messages} onSend={sendChat} disabled={status !== 'in-room'} />
       </section>
     </main>
   )
