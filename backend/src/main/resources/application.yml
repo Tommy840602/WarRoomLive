@@ -10,6 +10,9 @@ warroomlive:
     # Comma-separated list of allowed origins for the WebSocket handshake.
     # "*" is convenient for local development; lock this down per environment.
     allowed-origins: "*"
+    # Hard cap on participants per room. The client uses a full WebRTC mesh, whose
+    # upload bandwidth scales with peer count, so keep this small until an SFU exists.
+    max-room-size: 8
 
 logging:
   level:

@@ -34,13 +34,18 @@ public class SignalingHandler extends TextWebSocketHandler {
 
     private final RoomManager rooms;
     private final ObjectMapper mapper;
+    private final int maxRoomSize;
 
     /** Wraps raw sessions so concurrent sends from multiple peers are serialized safely. */
     private final Map<String, ConcurrentWebSocketSessionDecorator> safeSessions = new ConcurrentHashMap<>();
 
-    public SignalingHandler(RoomManager rooms, ObjectMapper mapper) {
+    public SignalingHandler(
+            RoomManager rooms,
+            ObjectMapper mapper,
+            @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-room-size:8}") int maxRoomSize) {
         this.rooms = rooms;
         this.mapper = mapper;
+        this.maxRoomSize = maxRoomSize;
     }
 
     @Override
@@ -80,6 +85,17 @@ public class SignalingHandler extends TextWebSocketHandler {
     private void handleJoin(WebSocketSession session, SignalMessage msg) {
         if (isBlank(msg.room()) || isBlank(msg.from())) {
             sendError(session, msg.room(), "join requires 'room' and 'from'");
+            return;
+        }
+
+        // Reject if the room is at capacity — unless this peer is already a member (reconnect).
+        List<String> current = rooms.peersIn(msg.room()).stream().map(PeerInfo::id).toList();
+        if (current.size() >= maxRoomSize && !current.contains(msg.from())) {
+            log.info("Rejected {} from full room {} ({}/{})",
+                    msg.from(), msg.room(), current.size(), maxRoomSize);
+            send(session, new SignalMessage(
+                    SignalMessage.TYPE_ROOM_FULL, msg.room(), null, msg.from(),
+                    mapper.valueToTree(maxRoomSize)));
             return;
         }
 
