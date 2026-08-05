@@ -2,6 +2,7 @@ package com.warroomlive.signaling;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.warroomlive.chat.StoredMessage;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -113,6 +114,22 @@ class SignalingHandlerIntegrationTest {
         assertThat(bobNotice.type()).isEqualTo("peer-left");
         assertThat(bobNotice.from()).isEqualTo("alice");
 
+        // A peer joining later receives the room's persisted chat history.
+        RecordingHandler carol = new RecordingHandler();
+        WebSocketSession carolSession = client
+                .execute(carol, new WebSocketHttpHeaders(), signalUri()).get(5, TimeUnit.SECONDS);
+        carolSession.sendMessage(text(new SignalMessage(
+                "join", "room-1", "carol", null, mapper.valueToTree("Carol"))));
+        assertThat(carol.take().type()).isEqualTo("peers");
+        SignalMessage history = carol.take();
+        assertThat(history.type()).isEqualTo("history");
+        List<StoredMessage> stored = mapper.convertValue(
+                history.payload(), new TypeReference<List<StoredMessage>>() {});
+        assertThat(stored).hasSize(1);
+        assertThat(stored.get(0).text()).isEqualTo("hello team");
+        assertThat(stored.get(0).name()).isEqualTo("Alice");
+
+        carolSession.close(CloseStatus.NORMAL);
         bobSession.close(CloseStatus.NORMAL);
     }
 

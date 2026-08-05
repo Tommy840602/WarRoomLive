@@ -1,6 +1,8 @@
 package com.warroomlive.signaling;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.warroomlive.chat.ChatRepository;
+import com.warroomlive.chat.StoredMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -34,7 +36,9 @@ public class SignalingHandler extends TextWebSocketHandler {
 
     private final RoomManager rooms;
     private final ObjectMapper mapper;
+    private final ChatRepository chat;
     private final int maxRoomSize;
+    private final int historyLimit;
 
     /** Wraps raw sessions so concurrent sends from multiple peers are serialized safely. */
     private final Map<String, ConcurrentWebSocketSessionDecorator> safeSessions = new ConcurrentHashMap<>();
@@ -42,10 +46,14 @@ public class SignalingHandler extends TextWebSocketHandler {
     public SignalingHandler(
             RoomManager rooms,
             ObjectMapper mapper,
-            @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-room-size:8}") int maxRoomSize) {
+            ChatRepository chat,
+            @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-room-size:8}") int maxRoomSize,
+            @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.history-limit:100}") int historyLimit) {
         this.rooms = rooms;
         this.mapper = mapper;
+        this.chat = chat;
         this.maxRoomSize = maxRoomSize;
+        this.historyLimit = historyLimit;
     }
 
     @Override
@@ -75,8 +83,9 @@ public class SignalingHandler extends TextWebSocketHandler {
             case SignalMessage.TYPE_JOIN -> handleJoin(session, msg);
             case SignalMessage.TYPE_OFFER, SignalMessage.TYPE_ANSWER, SignalMessage.TYPE_CANDIDATE ->
                     relayToPeer(session, msg);
-            case SignalMessage.TYPE_CHAT, SignalMessage.TYPE_STATE,
-                 SignalMessage.TYPE_REACTION, SignalMessage.TYPE_HAND -> broadcastToRoom(session, msg);
+            case SignalMessage.TYPE_CHAT -> handleChat(session, msg);
+            case SignalMessage.TYPE_STATE, SignalMessage.TYPE_REACTION, SignalMessage.TYPE_HAND ->
+                    broadcastToRoom(session, msg);
             case SignalMessage.TYPE_LEAVE -> handleLeave(session);
             default -> sendError(session, msg.room(), "unsupported message type: " + msg.type());
         }
@@ -109,6 +118,14 @@ public class SignalingHandler extends TextWebSocketHandler {
                 SignalMessage.TYPE_PEERS, msg.room(), null, msg.from(),
                 mapper.valueToTree(existingPeers)));
 
+        // Replay the room's recent chat so a refreshed or newly-joined peer has context.
+        List<StoredMessage> history = chat.recent(msg.room(), historyLimit);
+        if (!history.isEmpty()) {
+            send(session, new SignalMessage(
+                    SignalMessage.TYPE_HISTORY, msg.room(), null, msg.from(),
+                    mapper.valueToTree(history)));
+        }
+
         // Tell everyone else that a new peer arrived, carrying its display name.
         SignalMessage joined = new SignalMessage(
                 SignalMessage.TYPE_PEER_JOINED, msg.room(), msg.from(), null,
@@ -129,7 +146,19 @@ public class SignalingHandler extends TextWebSocketHandler {
         send(target.get(), msg);
     }
 
-    /** Fans a message (chat text or media state) out to everyone else in the room. */
+    /** Persists a chat message, then fans it out to everyone else in the room. */
+    private void handleChat(WebSocketSession session, SignalMessage msg) {
+        if (isBlank(msg.room()) || isBlank(msg.from()) || msg.payload() == null) {
+            sendError(session, msg.room(), "chat requires 'room', 'from' and 'payload'");
+            return;
+        }
+        String name = rooms.nameOf(msg.room(), msg.from()).orElse(msg.from());
+        chat.append(msg.room(), new StoredMessage(
+                msg.from(), name, msg.payload().asText(), System.currentTimeMillis()));
+        rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, msg));
+    }
+
+    /** Fans an ephemeral message (media state, reaction, hand) out to the rest of the room. */
     private void broadcastToRoom(WebSocketSession session, SignalMessage msg) {
         if (isBlank(msg.room()) || isBlank(msg.from()) || msg.payload() == null) {
             sendError(session, msg.room(), msg.type() + " requires 'room', 'from' and 'payload'");

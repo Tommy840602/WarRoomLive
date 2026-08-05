@@ -4,6 +4,16 @@ server:
 spring:
   application:
     name: warroomlive-backend
+  # Default profile keeps chat in memory. spring-boot-starter-data-jpa is on the
+  # classpath (for the postgres profile), so its DataSource/JPA auto-config must be
+  # disabled here to avoid a startup failure with no database. The 'postgres' profile
+  # clears this list.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
 
 warroomlive:
   signaling:
@@ -13,6 +23,9 @@ warroomlive:
     # Hard cap on participants per room. The client uses a full WebRTC mesh, whose
     # upload bandwidth scales with peer count, so keep this small until an SFU exists.
     max-room-size: 8
+  chat:
+    # How many recent messages to retain per room (in-memory) and replay on join.
+    history-limit: 100
 
 logging:
   level:
