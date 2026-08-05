@@ -12,6 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `frontend/` — React 18 + TypeScript, built with Vite.
 - `README.md` — architecture diagram and run instructions (keep in sync with this file).
 - `AGENTS.md`, `.github/agents/` — workspace agent conventions.
+- `.github/workflows/ci.yml` — CI: runs `mvn verify` (backend) and `npm ci && npm run build` (frontend) on push/PR to `main`. Keep the toolchain versions here in step with the Java/Node versions above.
 
 ## Commands
 
