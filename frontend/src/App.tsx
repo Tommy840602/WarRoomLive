@@ -3,6 +3,7 @@ import { SignalingClient, defaultSignalingUrl } from './signaling/SignalingClien
 import { WebRtcRoom } from './webrtc/WebRtcRoom'
 import { VideoTile } from './components/VideoTile'
 import { ChatPanel } from './components/ChatPanel'
+import { MemberList, type Member } from './components/MemberList'
 import type { PeerInfo } from './signaling/types'
 import './App.css'
 
@@ -32,6 +33,12 @@ export default function App() {
 
   /** Resolves a peer id to its display name, falling back to a short id. */
   const nameOf = (peerId: string) => names.get(peerId) ?? peerId.slice(0, 8)
+
+  /** Everyone currently in the room, self first, for the member list. */
+  const members: Member[] = [
+    { id: selfIdRef.current, name: name.trim() || '你', isSelf: true },
+    ...[...names].map(([id, memberName]) => ({ id, name: memberName, isSelf: false })),
+  ]
 
   const join = useCallback(async () => {
     setStatus('connecting')
@@ -169,16 +176,19 @@ export default function App() {
             <VideoTile key={peerId} label={nameOf(peerId)} stream={stream} />
           ))}
         </div>
-        <ChatPanel
-          messages={messages.map((m) => ({
-            id: m.id,
-            from: m.mine ? '你' : nameOf(m.fromId),
-            text: m.text,
-            mine: m.mine,
-          }))}
-          onSend={sendChat}
-          disabled={status !== 'in-room'}
-        />
+        <div className="sidebar">
+          {status === 'in-room' && <MemberList members={members} />}
+          <ChatPanel
+            messages={messages.map((m) => ({
+              id: m.id,
+              from: m.mine ? '你' : nameOf(m.fromId),
+              text: m.text,
+              mine: m.mine,
+            }))}
+            onSend={sendChat}
+            disabled={status !== 'in-room'}
+          />
+        </div>
       </section>
     </main>
   )
