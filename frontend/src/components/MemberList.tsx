@@ -2,6 +2,8 @@ export interface Member {
   id: string
   name: string
   isSelf: boolean
+  audioOff?: boolean
+  videoOff?: boolean
 }
 
 interface MemberListProps {
@@ -21,6 +23,10 @@ export function MemberList({ members }: MemberListProps) {
             <span className="members__name">
               {m.name}
               {m.isSelf && <span className="members__you">(你)</span>}
+            </span>
+            <span className="members__status">
+              {m.audioOff && <span aria-label="靜音">🔇</span>}
+              {m.videoOff && <span aria-label="關閉視訊">📷</span>}
             </span>
           </li>
         ))}

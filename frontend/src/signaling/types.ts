@@ -8,6 +8,7 @@ export type SignalType =
   | 'answer'
   | 'candidate'
   | 'chat'
+  | 'state'
   | 'peers'
   | 'peer-joined'
   | 'peer-left'
@@ -17,6 +18,12 @@ export type SignalType =
 export interface PeerInfo {
   id: string
   name: string
+}
+
+/** A peer's media on/off flags, carried in `state` messages (true = on). */
+export interface MediaState {
+  audio: boolean
+  video: boolean
 }
 
 export interface SignalMessage<TPayload = unknown> {

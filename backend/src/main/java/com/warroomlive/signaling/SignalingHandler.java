@@ -70,7 +70,7 @@ public class SignalingHandler extends TextWebSocketHandler {
             case SignalMessage.TYPE_JOIN -> handleJoin(session, msg);
             case SignalMessage.TYPE_OFFER, SignalMessage.TYPE_ANSWER, SignalMessage.TYPE_CANDIDATE ->
                     relayToPeer(session, msg);
-            case SignalMessage.TYPE_CHAT -> handleChat(session, msg);
+            case SignalMessage.TYPE_CHAT, SignalMessage.TYPE_STATE -> broadcastToRoom(session, msg);
             case SignalMessage.TYPE_LEAVE -> handleLeave(session);
             default -> sendError(session, msg.room(), "unsupported message type: " + msg.type());
         }
@@ -112,12 +112,12 @@ public class SignalingHandler extends TextWebSocketHandler {
         send(target.get(), msg);
     }
 
-    private void handleChat(WebSocketSession session, SignalMessage msg) {
+    /** Fans a message (chat text or media state) out to everyone else in the room. */
+    private void broadcastToRoom(WebSocketSession session, SignalMessage msg) {
         if (isBlank(msg.room()) || isBlank(msg.from()) || msg.payload() == null) {
-            sendError(session, msg.room(), "chat requires 'room', 'from' and 'payload'");
+            sendError(session, msg.room(), msg.type() + " requires 'room', 'from' and 'payload'");
             return;
         }
-        // Fan the text out to everyone else in the room; the sender renders its own copy locally.
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, msg));
     }
 

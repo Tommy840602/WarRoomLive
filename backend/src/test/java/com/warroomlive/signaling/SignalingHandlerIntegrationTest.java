@@ -89,6 +89,16 @@ class SignalingHandlerIntegrationTest {
         assertThat(chat.from()).isEqualTo("alice");
         assertThat(mapper.convertValue(chat.payload(), String.class)).isEqualTo("hello team");
 
+        // Media state from Alice is broadcast to Bob.
+        aliceSession.sendMessage(text(new SignalMessage(
+                "state", "room-1", "alice", null,
+                mapper.readTree("{\"audio\":false,\"video\":true}"))));
+        SignalMessage state = bob.take();
+        assertThat(state.type()).isEqualTo("state");
+        assertThat(state.from()).isEqualTo("alice");
+        assertThat(state.payload().get("audio").asBoolean()).isFalse();
+        assertThat(state.payload().get("video").asBoolean()).isTrue();
+
         // When Alice disconnects, Bob is told she left.
         aliceSession.close(CloseStatus.NORMAL);
         SignalMessage bobNotice = bob.take();

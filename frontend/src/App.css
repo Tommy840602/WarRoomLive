@@ -107,6 +107,34 @@
   background: rgba(0, 0, 0, 0.6);
   border-radius: 4px;
   font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.video-tile__mute {
+  font-size: 0.85rem;
+}
+
+.video-tile__off {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1a1e26;
+}
+
+.video-tile__off-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: #2f3846;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  color: #e6e8eb;
 }
 
 .sidebar {
@@ -178,6 +206,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+}
+
+.members__status {
+  display: flex;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  flex: 0 0 auto;
 }
 
 .members__you {

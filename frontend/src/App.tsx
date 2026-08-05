@@ -4,7 +4,7 @@ import { WebRtcRoom } from './webrtc/WebRtcRoom'
 import { VideoTile } from './components/VideoTile'
 import { ChatPanel } from './components/ChatPanel'
 import { MemberList, type Member } from './components/MemberList'
-import type { PeerInfo } from './signaling/types'
+import type { MediaState, PeerInfo } from './signaling/types'
 import './App.css'
 
 type Status = 'idle' | 'connecting' | 'in-room' | 'error'
@@ -27,20 +27,37 @@ export default function App() {
   const [names, setNames] = useState<Map<string, string>>(new Map())
   const [messages, setMessages] = useState<ChatEntry[]>([])
   const [screenSharing, setScreenSharing] = useState(false)
+  const [audioEnabled, setAudioEnabled] = useState(true)
+  const [videoEnabled, setVideoEnabled] = useState(true)
+  const [peerStates, setPeerStates] = useState<Map<string, MediaState>>(new Map())
 
   const clientRef = useRef<SignalingClient | null>(null)
   const roomRef = useRef<WebRtcRoom | null>(null)
   const selfIdRef = useRef<string>(crypto.randomUUID())
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const screenStreamRef = useRef<MediaStream | null>(null)
+  // Mirror the enable flags so listeners registered once can read the latest values.
+  const mediaStateRef = useRef<MediaState>({ audio: true, video: true })
 
   /** Resolves a peer id to its display name, falling back to a short id. */
   const nameOf = (peerId: string) => names.get(peerId) ?? peerId.slice(0, 8)
 
   /** Everyone currently in the room, self first, for the member list. */
   const members: Member[] = [
-    { id: selfIdRef.current, name: name.trim() || '你', isSelf: true },
-    ...[...names].map(([id, memberName]) => ({ id, name: memberName, isSelf: false })),
+    {
+      id: selfIdRef.current,
+      name: name.trim() || '你',
+      isSelf: true,
+      audioOff: !audioEnabled,
+      videoOff: !videoEnabled,
+    },
+    ...[...names].map(([id, memberName]) => ({
+      id,
+      name: memberName,
+      isSelf: false,
+      audioOff: peerStates.get(id)?.audio === false,
+      videoOff: peerStates.get(id)?.video === false,
+    })),
   ]
 
   const join = useCallback(async () => {
@@ -65,15 +82,26 @@ export default function App() {
         }),
       )
       client.on('peer-joined', (msg) => {
-        if (msg.from) setNames((prev) => new Map(prev).set(msg.from!, String(msg.payload)))
+        if (!msg.from) return
+        setNames((prev) => new Map(prev).set(msg.from!, String(msg.payload)))
+        // Re-announce our current media state so the newcomer sees it too.
+        client.send({ type: 'state', room, from: selfIdRef.current, payload: mediaStateRef.current })
       })
       client.on('peer-left', (msg) => {
-        if (msg.from)
-          setNames((prev) => {
-            const next = new Map(prev)
-            next.delete(msg.from!)
-            return next
-          })
+        if (!msg.from) return
+        setNames((prev) => {
+          const next = new Map(prev)
+          next.delete(msg.from!)
+          return next
+        })
+        setPeerStates((prev) => {
+          const next = new Map(prev)
+          next.delete(msg.from!)
+          return next
+        })
+      })
+      client.on('state', (msg) => {
+        if (msg.from) setPeerStates((prev) => new Map(prev).set(msg.from!, msg.payload as MediaState))
       })
 
       // Chat rides the same signaling socket, independent of the WebRTC mesh.
@@ -122,10 +150,41 @@ export default function App() {
     setLocalStream(null)
     setRemoteStreams(new Map())
     setNames(new Map())
+    setPeerStates(new Map())
     setMessages([])
     setScreenSharing(false)
+    setAudioEnabled(true)
+    setVideoEnabled(true)
+    mediaStateRef.current = { audio: true, video: true }
     setStatus('idle')
   }, [room])
+
+  /** Broadcasts our latest media on/off flags to the room. */
+  const broadcastState = useCallback(
+    (next: MediaState) => {
+      mediaStateRef.current = next
+      clientRef.current?.send({ type: 'state', room, from: selfIdRef.current, payload: next })
+    },
+    [room],
+  )
+
+  const toggleAudio = useCallback(() => {
+    const track = cameraStreamRef.current?.getAudioTracks()[0]
+    const next = !audioEnabled
+    if (track) track.enabled = next
+    setAudioEnabled(next)
+    broadcastState({ audio: next, video: videoEnabled })
+  }, [audioEnabled, videoEnabled, broadcastState])
+
+  const toggleVideo = useCallback(() => {
+    // Apply to whichever video is currently being sent (camera or screen share).
+    const track =
+      screenStreamRef.current?.getVideoTracks()[0] ?? cameraStreamRef.current?.getVideoTracks()[0]
+    const next = !videoEnabled
+    if (track) track.enabled = next
+    setVideoEnabled(next)
+    broadcastState({ audio: audioEnabled, video: next })
+  }, [audioEnabled, videoEnabled, broadcastState])
 
   const stopScreenShare = useCallback(() => {
     const camera = cameraStreamRef.current
@@ -195,6 +254,12 @@ export default function App() {
         </label>
         {status === 'in-room' ? (
           <>
+            <button className="btn-secondary" onClick={toggleAudio}>
+              {audioEnabled ? '靜音' : '取消靜音'}
+            </button>
+            <button className="btn-secondary" onClick={toggleVideo}>
+              {videoEnabled ? '關閉視訊' : '開啟視訊'}
+            </button>
             <button
               className="btn-secondary"
               onClick={screenSharing ? stopScreenShare : startScreenShare}
@@ -219,10 +284,18 @@ export default function App() {
               label={`${name.trim() || '你'}(你${screenSharing ? '・分享中' : ''})`}
               stream={localStream}
               muted
+              audioOff={!audioEnabled}
+              videoOff={!videoEnabled && !screenSharing}
             />
           )}
           {[...remoteStreams].map(([peerId, stream]) => (
-            <VideoTile key={peerId} label={nameOf(peerId)} stream={stream} />
+            <VideoTile
+              key={peerId}
+              label={nameOf(peerId)}
+              stream={stream}
+              audioOff={peerStates.get(peerId)?.audio === false}
+              videoOff={peerStates.get(peerId)?.video === false}
+            />
           ))}
         </div>
         <div className="sidebar">

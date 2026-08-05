@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.JsonNode;
  *   <li>{@code offer} / {@code answer} / {@code candidate} — WebRTC negotiation,
  *       relayed to the single peer named in {@code to}.</li>
  *   <li>{@code chat} — a text message from {@code from}, broadcast to the rest of the room.</li>
+ *   <li>{@code state} — {@code from}'s media on/off flags, broadcast to the rest of the room.</li>
  *   <li>{@code peers} — server → client, the peers already in the room on join.</li>
  *   <li>{@code peer-joined} / {@code peer-left} — server → client room membership events.</li>
  *   <li>{@code error} — server → client, human-readable reason in {@code payload}.</li>
@@ -37,6 +38,7 @@ public record SignalMessage(
     public static final String TYPE_ANSWER = "answer";
     public static final String TYPE_CANDIDATE = "candidate";
     public static final String TYPE_CHAT = "chat";
+    public static final String TYPE_STATE = "state";
     public static final String TYPE_PEERS = "peers";
     public static final String TYPE_PEER_JOINED = "peer-joined";
     public static final String TYPE_PEER_LEFT = "peer-left";
