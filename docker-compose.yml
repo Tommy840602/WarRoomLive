@@ -1,0 +1,40 @@
+# Full stack: Postgres + Spring Boot backend + nginx-served frontend.
+# Start with: docker compose up --build
+# Then open http://localhost:8088 (override the port with FRONTEND_PORT).
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: warroomlive
+      POSTGRES_PASSWORD: warroomlive
+      POSTGRES_DB: warroomlive
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U warroomlive"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    environment:
+      SPRING_PROFILES_ACTIVE: postgres
+      DB_URL: jdbc:postgresql://db:5432/warroomlive
+      DB_USER: warroomlive
+      DB_PASSWORD: warroomlive
+      # Behind the nginx proxy the browser Origin is the frontend host; allow it.
+      WARROOMLIVE_SIGNALING_ALLOWED_ORIGINS: "*"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "${FRONTEND_PORT:-8088}:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
