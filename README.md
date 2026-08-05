@@ -41,7 +41,29 @@ docker compose up --build
 - `backend`:以 `postgres` profile 執行,資料源指向 `db` 服務。
 - `db`:PostgreSQL,資料存於具名 volume `pgdata`(`docker compose down -v` 才會清除)。
 
-> 前端使用相對路徑與 `window.location.host` 組出 WebSocket URL,因此不論部署在哪個網域/埠都不需改設定。若要對外公開,建議在前面再加一層 HTTPS(TLS 終結),並把 `WARROOMLIVE_SIGNALING_ALLOWED_ORIGINS` 收斂成實際網域。
+> 前端使用相對路徑與 `window.location.host` 組出 WebSocket URL,因此不論部署在哪個網域/埠都不需改設定。
+
+## 正式對外:HTTPS(TLS 反向代理)
+
+用 Caddy 當邊緣代理,自動取得憑證。這是**選用的疊加層**(`docker-compose.tls.yml`),不影響上面的簡易部署。
+
+**正式環境**(真實網域,自動 Let's Encrypt,需 80/443 對外可達):
+
+```bash
+SITE_ADDRESS=warroom.example.com \
+  docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+# 開啟 https://warroom.example.com
+```
+
+**本機測試 TLS**(Caddy 內建自簽 CA,瀏覽器會警告是正常的):
+
+```bash
+HTTP_PORT=8081 HTTPS_PORT=8443 \
+  docker compose -f docker-compose.yml -f docker-compose.tls.yml up --build
+# 開啟 https://localhost:8443
+```
+
+啟用 TLS 疊加層後,前端不再直接對外(由 Caddy 終結 TLS 再轉給 nginx);頁面走 HTTPS 時,WebSocket 會自動使用 `wss`。對外公開時記得把 `WARROOMLIVE_SIGNALING_ALLOWED_ORIGINS` 收斂成實際網域。
 
 ## 使用 PostgreSQL 持久化(選用,直接跑後端)
 
