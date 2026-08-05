@@ -70,7 +70,8 @@ public class SignalingHandler extends TextWebSocketHandler {
             case SignalMessage.TYPE_JOIN -> handleJoin(session, msg);
             case SignalMessage.TYPE_OFFER, SignalMessage.TYPE_ANSWER, SignalMessage.TYPE_CANDIDATE ->
                     relayToPeer(session, msg);
-            case SignalMessage.TYPE_CHAT, SignalMessage.TYPE_STATE -> broadcastToRoom(session, msg);
+            case SignalMessage.TYPE_CHAT, SignalMessage.TYPE_STATE,
+                 SignalMessage.TYPE_REACTION, SignalMessage.TYPE_HAND -> broadcastToRoom(session, msg);
             case SignalMessage.TYPE_LEAVE -> handleLeave(session);
             default -> sendError(session, msg.room(), "unsupported message type: " + msg.type());
         }

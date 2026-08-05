@@ -9,10 +9,19 @@ interface VideoTileProps {
   audioOff?: boolean
   /** Overlay a placeholder when this participant's video is disabled. */
   videoOff?: boolean
+  /** Show a raised-hand badge. */
+  handRaised?: boolean
 }
 
 /** Renders a single participant's media stream with mic/camera status. */
-export function VideoTile({ label, stream, muted = false, audioOff = false, videoOff = false }: VideoTileProps) {
+export function VideoTile({
+  label,
+  stream,
+  muted = false,
+  audioOff = false,
+  videoOff = false,
+  handRaised = false,
+}: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
@@ -25,6 +34,7 @@ export function VideoTile({ label, stream, muted = false, audioOff = false, vide
   return (
     <figure className="video-tile">
       <video ref={videoRef} autoPlay playsInline muted={muted} />
+      {handRaised && <span className="video-tile__hand" aria-label="舉手">✋</span>}
       {videoOff && (
         <div className="video-tile__off">
           <span className="video-tile__off-avatar">{[...label.trim()][0]?.toUpperCase() ?? '?'}</span>

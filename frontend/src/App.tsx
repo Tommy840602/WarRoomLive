@@ -4,6 +4,8 @@ import { WebRtcRoom } from './webrtc/WebRtcRoom'
 import { VideoTile } from './components/VideoTile'
 import { ChatPanel } from './components/ChatPanel'
 import { MemberList, type Member } from './components/MemberList'
+import { ReactionBar } from './components/ReactionBar'
+import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
 import type { MediaState, PeerInfo } from './signaling/types'
 import './App.css'
 
@@ -30,17 +32,29 @@ export default function App() {
   const [audioEnabled, setAudioEnabled] = useState(true)
   const [videoEnabled, setVideoEnabled] = useState(true)
   const [peerStates, setPeerStates] = useState<Map<string, MediaState>>(new Map())
+  const [handRaised, setHandRaised] = useState(false)
+  const [raisedHands, setRaisedHands] = useState<Set<string>>(new Set())
+  const [reactions, setReactions] = useState<FloatingReaction[]>([])
 
   const clientRef = useRef<SignalingClient | null>(null)
   const roomRef = useRef<WebRtcRoom | null>(null)
   const selfIdRef = useRef<string>(crypto.randomUUID())
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const screenStreamRef = useRef<MediaStream | null>(null)
-  // Mirror the enable flags so listeners registered once can read the latest values.
+  // Mirror the flags so listeners registered once can read the latest values.
   const mediaStateRef = useRef<MediaState>({ audio: true, video: true })
+  const handRaisedRef = useRef(false)
 
   /** Resolves a peer id to its display name, falling back to a short id. */
   const nameOf = (peerId: string) => names.get(peerId) ?? peerId.slice(0, 8)
+
+  /** Adds a floating emoji that removes itself after the animation. */
+  const showReaction = useCallback((emoji: string) => {
+    const id = crypto.randomUUID()
+    const left = 10 + Math.floor(parseInt(id.slice(0, 8), 16) % 80)
+    setReactions((prev) => [...prev, { id, emoji, left }])
+    setTimeout(() => setReactions((prev) => prev.filter((r) => r.id !== id)), 3000)
+  }, [])
 
   /** Everyone currently in the room, self first, for the member list. */
   const members: Member[] = [
@@ -50,6 +64,7 @@ export default function App() {
       isSelf: true,
       audioOff: !audioEnabled,
       videoOff: !videoEnabled,
+      handRaised,
     },
     ...[...names].map(([id, memberName]) => ({
       id,
@@ -57,6 +72,7 @@ export default function App() {
       isSelf: false,
       audioOff: peerStates.get(id)?.audio === false,
       videoOff: peerStates.get(id)?.video === false,
+      handRaised: raisedHands.has(id),
     })),
   ]
 
@@ -84,8 +100,11 @@ export default function App() {
       client.on('peer-joined', (msg) => {
         if (!msg.from) return
         setNames((prev) => new Map(prev).set(msg.from!, String(msg.payload)))
-        // Re-announce our current media state so the newcomer sees it too.
+        // Re-announce our current media state and raised-hand status to the newcomer.
         client.send({ type: 'state', room, from: selfIdRef.current, payload: mediaStateRef.current })
+        if (handRaisedRef.current) {
+          client.send({ type: 'hand', room, from: selfIdRef.current, payload: true })
+        }
       })
       client.on('peer-left', (msg) => {
         if (!msg.from) return
@@ -99,9 +118,24 @@ export default function App() {
           next.delete(msg.from!)
           return next
         })
+        setRaisedHands((prev) => {
+          const next = new Set(prev)
+          next.delete(msg.from!)
+          return next
+        })
       })
       client.on('state', (msg) => {
         if (msg.from) setPeerStates((prev) => new Map(prev).set(msg.from!, msg.payload as MediaState))
+      })
+      client.on('reaction', (msg) => showReaction(String(msg.payload)))
+      client.on('hand', (msg) => {
+        if (!msg.from) return
+        setRaisedHands((prev) => {
+          const next = new Set(prev)
+          if (msg.payload) next.add(msg.from!)
+          else next.delete(msg.from!)
+          return next
+        })
       })
 
       // Chat rides the same signaling socket, independent of the WebRTC mesh.
@@ -155,7 +189,11 @@ export default function App() {
     setScreenSharing(false)
     setAudioEnabled(true)
     setVideoEnabled(true)
+    setHandRaised(false)
+    setRaisedHands(new Set())
+    setReactions([])
     mediaStateRef.current = { audio: true, video: true }
+    handRaisedRef.current = false
     setStatus('idle')
   }, [room])
 
@@ -185,6 +223,21 @@ export default function App() {
     setVideoEnabled(next)
     broadcastState({ audio: audioEnabled, video: next })
   }, [audioEnabled, videoEnabled, broadcastState])
+
+  const sendReaction = useCallback(
+    (emoji: string) => {
+      clientRef.current?.send({ type: 'reaction', room, from: selfIdRef.current, payload: emoji })
+      showReaction(emoji) // show our own reaction locally too
+    },
+    [room, showReaction],
+  )
+
+  const toggleHand = useCallback(() => {
+    const next = !handRaised
+    setHandRaised(next)
+    handRaisedRef.current = next
+    clientRef.current?.send({ type: 'hand', room, from: selfIdRef.current, payload: next })
+  }, [handRaised, room])
 
   const stopScreenShare = useCallback(() => {
     const camera = cameraStreamRef.current
@@ -277,6 +330,10 @@ export default function App() {
 
       {error && <p className="app__error">⚠️ {error}</p>}
 
+      {status === 'in-room' && (
+        <ReactionBar onReact={sendReaction} handRaised={handRaised} onToggleHand={toggleHand} />
+      )}
+
       <section className="workspace">
         <div className="video-grid">
           {localStream && (
@@ -286,6 +343,7 @@ export default function App() {
               muted
               audioOff={!audioEnabled}
               videoOff={!videoEnabled && !screenSharing}
+              handRaised={handRaised}
             />
           )}
           {[...remoteStreams].map(([peerId, stream]) => (
@@ -295,6 +353,7 @@ export default function App() {
               stream={stream}
               audioOff={peerStates.get(peerId)?.audio === false}
               videoOff={peerStates.get(peerId)?.video === false}
+              handRaised={raisedHands.has(peerId)}
             />
           ))}
         </div>
@@ -312,6 +371,8 @@ export default function App() {
           />
         </div>
       </section>
+
+      <FloatingReactions reactions={reactions} />
     </main>
   )
 }
