@@ -82,17 +82,20 @@ public class SignalingHandler extends TextWebSocketHandler {
             return;
         }
 
-        List<String> existingPeers = rooms.join(msg.room(), msg.from(), session);
-        log.info("Peer {} joined room {} ({} existing peer(s))", msg.from(), msg.room(), existingPeers.size());
+        String name = displayName(msg);
+        List<PeerInfo> existingPeers = rooms.join(msg.room(), msg.from(), name, session);
+        log.info("Peer {} ({}) joined room {} ({} existing peer(s))",
+                msg.from(), name, msg.room(), existingPeers.size());
 
-        // Tell the newcomer who is already here so it can initiate offers.
+        // Tell the newcomer who is already here (id + name) so it can initiate offers.
         send(session, new SignalMessage(
                 SignalMessage.TYPE_PEERS, msg.room(), null, msg.from(),
                 mapper.valueToTree(existingPeers)));
 
-        // Tell everyone else that a new peer arrived.
+        // Tell everyone else that a new peer arrived, carrying its display name.
         SignalMessage joined = new SignalMessage(
-                SignalMessage.TYPE_PEER_JOINED, msg.room(), msg.from(), null, null);
+                SignalMessage.TYPE_PEER_JOINED, msg.room(), msg.from(), null,
+                mapper.valueToTree(name));
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, joined));
     }
 
@@ -152,6 +155,17 @@ public class SignalingHandler extends TextWebSocketHandler {
         } catch (IOException e) {
             log.warn("Failed to send {} to {}: {}", message.type(), session.getId(), e.getMessage());
         }
+    }
+
+    /** Extracts a trimmed display name from a join payload, falling back to the peer id. */
+    private static String displayName(SignalMessage msg) {
+        if (msg.payload() != null && msg.payload().isTextual()) {
+            String name = msg.payload().asText().trim();
+            if (!name.isEmpty()) {
+                return name;
+            }
+        }
+        return msg.from();
     }
 
     private static boolean isBlank(String s) {

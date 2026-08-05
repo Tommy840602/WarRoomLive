@@ -1,5 +1,5 @@
 import { SignalingClient } from '../signaling/SignalingClient'
-import type { SignalMessage } from '../signaling/types'
+import type { PeerInfo, SignalMessage } from '../signaling/types'
 
 export interface WebRtcRoomEvents {
   /** A remote peer's media stream became available (or was replaced). */
@@ -29,8 +29,8 @@ export class WebRtcRoom {
     private readonly iceServers: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }],
   ) {}
 
-  /** Wires up signaling handlers and announces our arrival in the room. */
-  join(room: string): void {
+  /** Wires up signaling handlers and announces our arrival in the room under {@code displayName}. */
+  join(room: string, displayName: string): void {
     this.signaling.on('peers', (msg) => this.onExistingPeers(room, msg))
     this.signaling.on('peer-joined', (msg) => this.onPeerJoined(room, msg))
     this.signaling.on('peer-left', (msg) => this.onPeerLeft(msg))
@@ -39,7 +39,7 @@ export class WebRtcRoom {
     this.signaling.on('candidate', (msg) => this.onCandidate(msg))
     this.signaling.on('error', (msg) => this.events.onError?.(String(msg.payload)))
 
-    this.signaling.send({ type: 'join', room, from: this.selfId })
+    this.signaling.send({ type: 'join', room, from: this.selfId, payload: displayName })
   }
 
   leave(room: string): void {
@@ -51,9 +51,9 @@ export class WebRtcRoom {
   // --- signaling handlers ---------------------------------------------------
 
   private async onExistingPeers(room: string, msg: SignalMessage): Promise<void> {
-    const peerIds = (msg.payload as string[]) ?? []
+    const peers = (msg.payload as PeerInfo[]) ?? []
     // We are the newcomer: initiate an offer to everyone already here.
-    for (const peerId of peerIds) {
+    for (const { id: peerId } of peers) {
       const pc = this.createPeer(room, peerId)
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)

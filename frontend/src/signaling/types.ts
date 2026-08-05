@@ -13,6 +13,12 @@ export type SignalType =
   | 'peer-left'
   | 'error'
 
+/** Public identity of a peer, as carried in `peers` messages. */
+export interface PeerInfo {
+  id: string
+  name: string
+}
+
 export interface SignalMessage<TPayload = unknown> {
   type: SignalType
   room?: string

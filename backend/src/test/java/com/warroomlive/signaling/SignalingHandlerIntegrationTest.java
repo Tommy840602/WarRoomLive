@@ -1,5 +1,6 @@
 package com.warroomlive.signaling;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,7 +46,8 @@ class SignalingHandlerIntegrationTest {
         RecordingHandler alice = new RecordingHandler();
         WebSocketSession aliceSession = client
                 .execute(alice, new WebSocketHttpHeaders(), signalUri()).get(5, TimeUnit.SECONDS);
-        aliceSession.sendMessage(text(new SignalMessage("join", "room-1", "alice", null, null)));
+        aliceSession.sendMessage(text(new SignalMessage(
+                "join", "room-1", "alice", null, mapper.valueToTree("Alice"))));
 
         SignalMessage alicePeers = alice.take();
         assertThat(alicePeers.type()).isEqualTo("peers");
@@ -55,17 +57,21 @@ class SignalingHandlerIntegrationTest {
         RecordingHandler bob = new RecordingHandler();
         WebSocketSession bobSession = client
                 .execute(bob, new WebSocketHttpHeaders(), signalUri()).get(5, TimeUnit.SECONDS);
-        bobSession.sendMessage(text(new SignalMessage("join", "room-1", "bob", null, null)));
+        bobSession.sendMessage(text(new SignalMessage(
+                "join", "room-1", "bob", null, mapper.valueToTree("Bob"))));
 
-        // Bob sees Alice already present.
+        // Bob sees Alice already present, with her display name.
         SignalMessage bobPeers = bob.take();
         assertThat(bobPeers.type()).isEqualTo("peers");
-        assertThat(mapper.convertValue(bobPeers.payload(), List.class)).containsExactly("alice");
+        List<PeerInfo> peers = mapper.convertValue(
+                bobPeers.payload(), new TypeReference<List<PeerInfo>>() {});
+        assertThat(peers).containsExactly(new PeerInfo("alice", "Alice"));
 
-        // Alice is notified that Bob arrived.
+        // Alice is notified that Bob arrived, carrying his name.
         SignalMessage aliceNotice = alice.take();
         assertThat(aliceNotice.type()).isEqualTo("peer-joined");
         assertThat(aliceNotice.from()).isEqualTo("bob");
+        assertThat(mapper.convertValue(aliceNotice.payload(), String.class)).isEqualTo("Bob");
 
         // Alice sends Bob an offer; it is relayed verbatim.
         aliceSession.sendMessage(text(new SignalMessage(

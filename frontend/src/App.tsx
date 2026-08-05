@@ -2,22 +2,36 @@ import { useCallback, useRef, useState } from 'react'
 import { SignalingClient, defaultSignalingUrl } from './signaling/SignalingClient'
 import { WebRtcRoom } from './webrtc/WebRtcRoom'
 import { VideoTile } from './components/VideoTile'
-import { ChatPanel, type ChatMessage } from './components/ChatPanel'
+import { ChatPanel } from './components/ChatPanel'
+import type { PeerInfo } from './signaling/types'
 import './App.css'
 
 type Status = 'idle' | 'connecting' | 'in-room' | 'error'
 
+/** Chat message as stored locally; the sender's display name is resolved at render time. */
+interface ChatEntry {
+  id: string
+  fromId: string
+  text: string
+  mine: boolean
+}
+
 export default function App() {
   const [room, setRoom] = useState('war-room')
+  const [name, setName] = useState('')
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState<string | null>(null)
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map())
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [names, setNames] = useState<Map<string, string>>(new Map())
+  const [messages, setMessages] = useState<ChatEntry[]>([])
 
   const clientRef = useRef<SignalingClient | null>(null)
   const roomRef = useRef<WebRtcRoom | null>(null)
   const selfIdRef = useRef<string>(crypto.randomUUID())
+
+  /** Resolves a peer id to its display name, falling back to a short id. */
+  const nameOf = (peerId: string) => names.get(peerId) ?? peerId.slice(0, 8)
 
   const join = useCallback(async () => {
     setStatus('connecting')
@@ -30,13 +44,34 @@ export default function App() {
       await client.connect()
       clientRef.current = client
 
+      // Track peer display names from room membership events. Registered before
+      // join() so the initial `peers` reply is not missed.
+      client.on('peers', (msg) =>
+        setNames((prev) => {
+          const next = new Map(prev)
+          ;((msg.payload as PeerInfo[]) ?? []).forEach((p) => next.set(p.id, p.name))
+          return next
+        }),
+      )
+      client.on('peer-joined', (msg) => {
+        if (msg.from) setNames((prev) => new Map(prev).set(msg.from!, String(msg.payload)))
+      })
+      client.on('peer-left', (msg) => {
+        if (msg.from)
+          setNames((prev) => {
+            const next = new Map(prev)
+            next.delete(msg.from!)
+            return next
+          })
+      })
+
       // Chat rides the same signaling socket, independent of the WebRTC mesh.
       client.on('chat', (msg) =>
         setMessages((prev) => [
           ...prev,
           {
             id: crypto.randomUUID(),
-            from: (msg.from ?? 'unknown').slice(0, 8),
+            fromId: msg.from ?? 'unknown',
             text: String(msg.payload),
             mine: false,
           },
@@ -55,13 +90,14 @@ export default function App() {
         onError: (reason) => setError(reason),
       })
       roomRef.current = webRtcRoom
-      webRtcRoom.join(room)
+      const displayName = name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`
+      webRtcRoom.join(room, displayName)
       setStatus('in-room')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setStatus('error')
     }
-  }, [room])
+  }, [room, name])
 
   const leave = useCallback(() => {
     roomRef.current?.leave(room)
@@ -71,6 +107,7 @@ export default function App() {
     clientRef.current = null
     setLocalStream(null)
     setRemoteStreams(new Map())
+    setNames(new Map())
     setMessages([])
     setStatus('idle')
   }, [room, localStream])
@@ -81,7 +118,7 @@ export default function App() {
       // The server broadcasts only to others, so echo our own message locally.
       setMessages((prev) => [
         ...prev,
-        { id: crypto.randomUUID(), from: '你', text, mine: true },
+        { id: crypto.randomUUID(), fromId: selfIdRef.current, text, mine: true },
       ])
     },
     [room],
@@ -95,6 +132,15 @@ export default function App() {
       </header>
 
       <section className="app__controls">
+        <label>
+          你的名稱
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="輸入顯示名稱"
+            disabled={status === 'in-room' || status === 'connecting'}
+          />
+        </label>
         <label>
           房間名稱
           <input
@@ -116,12 +162,23 @@ export default function App() {
 
       <section className="workspace">
         <div className="video-grid">
-          {localStream && <VideoTile label="你" stream={localStream} muted />}
+          {localStream && (
+            <VideoTile label={`${name.trim() || '你'}(你)`} stream={localStream} muted />
+          )}
           {[...remoteStreams].map(([peerId, stream]) => (
-            <VideoTile key={peerId} label={peerId.slice(0, 8)} stream={stream} />
+            <VideoTile key={peerId} label={nameOf(peerId)} stream={stream} />
           ))}
         </div>
-        <ChatPanel messages={messages} onSend={sendChat} disabled={status !== 'in-room'} />
+        <ChatPanel
+          messages={messages.map((m) => ({
+            id: m.id,
+            from: m.mine ? '你' : nameOf(m.fromId),
+            text: m.text,
+            mine: m.mine,
+          }))}
+          onSend={sendChat}
+          disabled={status !== 'in-room'}
+        />
       </section>
     </main>
   )

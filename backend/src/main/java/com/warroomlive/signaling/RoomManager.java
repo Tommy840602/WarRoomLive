@@ -18,8 +18,12 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class RoomManager {
 
-    /** room id -> (peer id -> session) */
-    private final Map<String, Map<String, WebSocketSession>> rooms = new ConcurrentHashMap<>();
+    /** A connected participant: its public identity plus the live transport. */
+    private record Member(PeerInfo info, WebSocketSession session) {
+    }
+
+    /** room id -> (peer id -> member) */
+    private final Map<String, Map<String, Member>> rooms = new ConcurrentHashMap<>();
 
     /** websocket session id -> where that session is registered, for O(1) cleanup on disconnect */
     private final Map<String, PeerLocation> sessionIndex = new ConcurrentHashMap<>();
@@ -31,12 +35,15 @@ public class RoomManager {
     /**
      * Registers a peer in a room.
      *
-     * @return the peer ids that were already present (excluding the joining peer)
+     * @return the peers that were already present (excluding the joining peer)
      */
-    public List<String> join(String room, String peerId, WebSocketSession session) {
-        Map<String, WebSocketSession> members = rooms.computeIfAbsent(room, r -> new ConcurrentHashMap<>());
-        List<String> existing = members.keySet().stream().filter(id -> !id.equals(peerId)).toList();
-        members.put(peerId, session);
+    public List<PeerInfo> join(String room, String peerId, String name, WebSocketSession session) {
+        Map<String, Member> members = rooms.computeIfAbsent(room, r -> new ConcurrentHashMap<>());
+        List<PeerInfo> existing = members.values().stream()
+                .map(Member::info)
+                .filter(info -> !info.id().equals(peerId))
+                .toList();
+        members.put(peerId, new Member(new PeerInfo(peerId, name), session));
         sessionIndex.put(session.getId(), new PeerLocation(room, peerId));
         return existing;
     }
@@ -51,7 +58,7 @@ public class RoomManager {
         if (location == null) {
             return Optional.empty();
         }
-        Map<String, WebSocketSession> members = rooms.get(location.room());
+        Map<String, Member> members = rooms.get(location.room());
         if (members != null) {
             members.remove(location.peerId());
             if (members.isEmpty()) {
@@ -62,27 +69,28 @@ public class RoomManager {
         return Optional.of(location);
     }
 
-    /** Returns the peer ids currently in the room (empty if the room is unknown). */
-    public List<String> peersIn(String room) {
-        Map<String, WebSocketSession> members = rooms.get(room);
-        return members == null ? List.of() : List.copyOf(members.keySet());
+    /** Returns the peers currently in the room (empty if the room is unknown). */
+    public List<PeerInfo> peersIn(String room) {
+        Map<String, Member> members = rooms.get(room);
+        return members == null ? List.of() : members.values().stream().map(Member::info).toList();
     }
 
     /** Looks up the live session for a peer within a room. */
     public Optional<WebSocketSession> session(String room, String peerId) {
-        Map<String, WebSocketSession> members = rooms.get(room);
-        return Optional.ofNullable(members == null ? null : members.get(peerId));
+        Map<String, Member> members = rooms.get(room);
+        Member member = members == null ? null : members.get(peerId);
+        return Optional.ofNullable(member == null ? null : member.session());
     }
 
     /** Returns every session in a room except the excluded peer — used for broadcasts. */
     public List<WebSocketSession> othersIn(String room, String excludePeerId) {
-        Map<String, WebSocketSession> members = rooms.get(room);
+        Map<String, Member> members = rooms.get(room);
         if (members == null) {
             return List.of();
         }
         return members.entrySet().stream()
                 .filter(e -> !e.getKey().equals(excludePeerId))
-                .map(Map.Entry::getValue)
+                .map(e -> e.getValue().session())
                 .toList();
     }
 }
