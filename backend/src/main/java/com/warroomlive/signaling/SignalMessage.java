@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.JsonNode;
  *   <li>{@code hand} — {@code from}'s raise-hand flag, broadcast to the rest of the room.</li>
  *   <li>{@code peers} — server → client, the peers already in the room on join.</li>
  *   <li>{@code peer-joined} / {@code peer-left} — server → client room membership events.</li>
+ *   <li>{@code room-full} — server → client, join rejected; {@code payload} is the room's capacity.</li>
  *   <li>{@code error} — server → client, human-readable reason in {@code payload}.</li>
  * </ul>
  *
@@ -46,5 +47,6 @@ public record SignalMessage(
     public static final String TYPE_PEERS = "peers";
     public static final String TYPE_PEER_JOINED = "peer-joined";
     public static final String TYPE_PEER_LEFT = "peer-left";
+    public static final String TYPE_ROOM_FULL = "room-full";
     public static final String TYPE_ERROR = "error";
 }

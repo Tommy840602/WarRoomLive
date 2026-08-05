@@ -14,6 +14,7 @@ export type SignalType =
   | 'peers'
   | 'peer-joined'
   | 'peer-left'
+  | 'room-full'
   | 'error'
 
 /** Public identity of a peer, as carried in `peers` messages. */

@@ -11,6 +11,9 @@ import './App.css'
 
 type Status = 'idle' | 'connecting' | 'in-room' | 'error'
 
+// The mesh topology degrades as peers multiply; warn before the hard cap (backend: 8).
+const ROOM_WARN_THRESHOLD = 6
+
 /** Chat message as stored locally; the sender's display name is resolved at render time. */
 interface ChatEntry {
   id: string
@@ -76,6 +79,31 @@ export default function App() {
     })),
   ]
 
+  /** Tears down the session and resets all room state (does not notify the server). */
+  const teardown = useCallback(() => {
+    clientRef.current?.close()
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop())
+    roomRef.current = null
+    clientRef.current = null
+    cameraStreamRef.current = null
+    screenStreamRef.current = null
+    setLocalStream(null)
+    setRemoteStreams(new Map())
+    setNames(new Map())
+    setPeerStates(new Map())
+    setMessages([])
+    setScreenSharing(false)
+    setAudioEnabled(true)
+    setVideoEnabled(true)
+    setHandRaised(false)
+    setRaisedHands(new Set())
+    setReactions([])
+    mediaStateRef.current = { audio: true, video: true }
+    handRaisedRef.current = false
+    setStatus('idle')
+  }, [])
+
   const join = useCallback(async () => {
     setStatus('connecting')
     setError(null)
@@ -127,6 +155,10 @@ export default function App() {
       client.on('state', (msg) => {
         if (msg.from) setPeerStates((prev) => new Map(prev).set(msg.from!, msg.payload as MediaState))
       })
+      client.on('room-full', (msg) => {
+        teardown()
+        setError(`房間已滿(上限 ${msg.payload} 人),請換一個房間或稍後再試`)
+      })
       client.on('reaction', (msg) => showReaction(String(msg.payload)))
       client.on('hand', (msg) => {
         if (!msg.from) return
@@ -170,32 +202,12 @@ export default function App() {
       setError(e instanceof Error ? e.message : String(e))
       setStatus('error')
     }
-  }, [room, name])
+  }, [room, name, teardown, showReaction])
 
   const leave = useCallback(() => {
     roomRef.current?.leave(room)
-    clientRef.current?.close()
-    cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
-    screenStreamRef.current?.getTracks().forEach((track) => track.stop())
-    roomRef.current = null
-    clientRef.current = null
-    cameraStreamRef.current = null
-    screenStreamRef.current = null
-    setLocalStream(null)
-    setRemoteStreams(new Map())
-    setNames(new Map())
-    setPeerStates(new Map())
-    setMessages([])
-    setScreenSharing(false)
-    setAudioEnabled(true)
-    setVideoEnabled(true)
-    setHandRaised(false)
-    setRaisedHands(new Set())
-    setReactions([])
-    mediaStateRef.current = { audio: true, video: true }
-    handRaisedRef.current = false
-    setStatus('idle')
-  }, [room])
+    teardown()
+  }, [room, teardown])
 
   /** Broadcasts our latest media on/off flags to the room. */
   const broadcastState = useCallback(
@@ -329,6 +341,12 @@ export default function App() {
       </section>
 
       {error && <p className="app__error">⚠️ {error}</p>}
+
+      {status === 'in-room' && members.length >= ROOM_WARN_THRESHOLD && (
+        <p className="app__warning">
+          ⚠️ 房間目前 {members.length} 人。此版本採 WebRTC full mesh,人數偏多時上行頻寬與畫面可能開始卡頓(上限 8 人)。
+        </p>
+      )}
 
       {status === 'in-room' && (
         <ReactionBar onReact={sendReaction} handRaised={handRaised} onToggleHand={toggleHand} />

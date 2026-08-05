@@ -64,6 +64,14 @@
   border-radius: 6px;
 }
 
+.app__warning {
+  color: #fbbf24;
+  background: #2a2411;
+  padding: 0.6rem 0.9rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 1fr 320px;
