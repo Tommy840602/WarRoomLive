@@ -75,6 +75,13 @@ public class RoomManager {
         return members == null ? List.of() : members.values().stream().map(Member::info).toList();
     }
 
+    /** Looks up a peer's display name within a room. */
+    public Optional<String> nameOf(String room, String peerId) {
+        Map<String, Member> members = rooms.get(room);
+        Member member = members == null ? null : members.get(peerId);
+        return Optional.ofNullable(member == null ? null : member.info().name());
+    }
+
     /** Looks up the live session for a peer within a room. */
     public Optional<WebSocketSession> session(String room, String peerId) {
         Map<String, Member> members = rooms.get(room);

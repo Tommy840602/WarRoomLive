@@ -1,0 +1,14 @@
+# Durable chat persistence. Activate with: SPRING_PROFILES_ACTIVE=postgres
+# Provide the datasource via environment variables (see defaults below).
+spring:
+  # Re-enable the JPA/DataSource auto-config that the default profile excludes.
+  autoconfigure:
+    exclude: []
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/warroomlive}
+    username: ${DB_USER:warroomlive}
+    password: ${DB_PASSWORD:warroomlive}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false

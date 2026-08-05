@@ -11,6 +11,7 @@ export type SignalType =
   | 'state'
   | 'reaction'
   | 'hand'
+  | 'history'
   | 'peers'
   | 'peer-joined'
   | 'peer-left'
@@ -27,6 +28,14 @@ export interface PeerInfo {
 export interface MediaState {
   audio: boolean
   video: boolean
+}
+
+/** A persisted chat message, carried in the `history` message on join. */
+export interface StoredMessage {
+  fromId: string
+  name: string
+  text: string
+  ts: number
 }
 
 export interface SignalMessage<TPayload = unknown> {

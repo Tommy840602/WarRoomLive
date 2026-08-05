@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.JsonNode;
  *   <li>{@code reaction} — an ephemeral emoji from {@code from}, broadcast to the rest of the room.</li>
  *   <li>{@code hand} — {@code from}'s raise-hand flag, broadcast to the rest of the room.</li>
  *   <li>{@code peers} — server → client, the peers already in the room on join.</li>
+ *   <li>{@code history} — server → client on join, the room's recent chat messages.</li>
  *   <li>{@code peer-joined} / {@code peer-left} — server → client room membership events.</li>
  *   <li>{@code room-full} — server → client, join rejected; {@code payload} is the room's capacity.</li>
  *   <li>{@code error} — server → client, human-readable reason in {@code payload}.</li>
@@ -45,6 +46,7 @@ public record SignalMessage(
     public static final String TYPE_REACTION = "reaction";
     public static final String TYPE_HAND = "hand";
     public static final String TYPE_PEERS = "peers";
+    public static final String TYPE_HISTORY = "history";
     public static final String TYPE_PEER_JOINED = "peer-joined";
     public static final String TYPE_PEER_LEFT = "peer-left";
     public static final String TYPE_ROOM_FULL = "room-full";

@@ -6,7 +6,7 @@ import { ChatPanel } from './components/ChatPanel'
 import { MemberList, type Member } from './components/MemberList'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
-import type { MediaState, PeerInfo } from './signaling/types'
+import type { MediaState, PeerInfo, StoredMessage } from './signaling/types'
 import './App.css'
 
 type Status = 'idle' | 'connecting' | 'in-room' | 'error'
@@ -20,6 +20,8 @@ interface ChatEntry {
   fromId: string
   text: string
   mine: boolean
+  /** For replayed history: the sender's name as recorded, since they may have left. */
+  name?: string
 }
 
 export default function App() {
@@ -168,6 +170,20 @@ export default function App() {
           else next.delete(msg.from!)
           return next
         })
+      })
+
+      // On join the server replays the room's recent chat history.
+      client.on('history', (msg) => {
+        const stored = (msg.payload as StoredMessage[]) ?? []
+        setMessages(
+          stored.map((m) => ({
+            id: crypto.randomUUID(),
+            fromId: m.fromId,
+            text: m.text,
+            mine: m.fromId === selfIdRef.current,
+            name: m.name,
+          })),
+        )
       })
 
       // Chat rides the same signaling socket, independent of the WebRTC mesh.
@@ -380,7 +396,7 @@ export default function App() {
           <ChatPanel
             messages={messages.map((m) => ({
               id: m.id,
-              from: m.mine ? '你' : nameOf(m.fromId),
+              from: m.mine ? '你' : m.name ?? nameOf(m.fromId),
               text: m.text,
               mine: m.mine,
             }))}
