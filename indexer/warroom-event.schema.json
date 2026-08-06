@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://warroomlive.dev/contracts/warroom-event.schema.json",
+  "title": "WarRoomLive event envelope",
+  "description": "Wire contract for every message on the warroom.events topic. Producers: backend OutboxPublisher (from outbox_events rows written by OutboxRecorder and the collab service). Consumers dedupe on eventId. Additive payload changes are allowed within a schemaVersion; breaking changes bump it. A hosted schema registry replaces this in-repo contract when multiple teams produce events.",
+  "type": "object",
+  "required": ["eventId", "eventType", "aggregateType", "aggregateId", "schemaVersion", "occurredAt", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique per event; the deduplication key for at-least-once delivery."
+    },
+    "eventType": {
+      "type": "string",
+      "pattern": "^[a-z]+(\\.[a-z_]+)+$",
+      "description": "Dot-separated domain event name, e.g. chat.message.created."
+    },
+    "aggregateType": { "type": "string", "minLength": 1, "maxLength": 50 },
+    "aggregateId": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "description": "ISO-8601 timestamp with offset." },
+    "payload": { "type": "object", "description": "Event-type-specific body." }
+  }
+}

@@ -237,7 +237,13 @@ export default function App() {
           token: lkToken,
         })
       } else {
-        mediaRoom = new WebRtcRoom(client, selfIdRef.current, stream, mediaEvents)
+        mediaRoom = new WebRtcRoom(
+          client,
+          selfIdRef.current,
+          stream,
+          mediaEvents,
+          media.iceServers?.length ? media.iceServers : undefined,
+        )
       }
       roomRef.current = mediaRoom
       mediaRoom.join(room, displayName)

@@ -3,9 +3,11 @@ package com.warroomlive.signaling;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.warroomlive.chat.ChatRepository;
 import com.warroomlive.chat.StoredMessage;
+import com.warroomlive.events.OutboxRecorder;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
+import org.springframework.beans.factory.ObjectProvider;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
@@ -41,6 +43,8 @@ public class SignalingHandler extends TextWebSocketHandler {
     private final Backplane backplane;
     private final ObjectMapper mapper;
     private final ChatRepository chat;
+    /** Present only under the kafka profile; membership events are skipped without it. */
+    private final ObjectProvider<OutboxRecorder> outbox;
     private final int maxRoomSize;
     private final int historyLimit;
 
@@ -56,6 +60,7 @@ public class SignalingHandler extends TextWebSocketHandler {
             Backplane backplane,
             ObjectMapper mapper,
             ChatRepository chat,
+            ObjectProvider<OutboxRecorder> outbox,
             MeterRegistry metrics,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-room-size:8}") int maxRoomSize,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.history-limit:100}") int historyLimit) {
@@ -63,6 +68,7 @@ public class SignalingHandler extends TextWebSocketHandler {
         this.backplane = backplane;
         this.mapper = mapper;
         this.chat = chat;
+        this.outbox = outbox;
         this.metrics = metrics;
         this.maxRoomSize = maxRoomSize;
         this.historyLimit = historyLimit;
@@ -98,6 +104,20 @@ public class SignalingHandler extends TextWebSocketHandler {
     }
 
     private void handleParsedMessage(WebSocketSession session, TextMessage message) {
+        // Per-message credential check (oidc mode): a connection whose handshake
+        // token has expired is closed — the client must reconnect with a renewed
+        // token. 4401 mirrors HTTP 401 in the private close-code range.
+        Object expiry = session.getAttributes().get(com.warroomlive.config.WebSocketConfig.TOKEN_EXPIRY_ATTRIBUTE);
+        if (expiry instanceof Long expiresAtMillis && System.currentTimeMillis() > expiresAtMillis) {
+            log.info("Closing session {}: handshake token expired", session.getId());
+            countIn("token-expired");
+            try {
+                session.close(new CloseStatus(4401, "access token expired"));
+            } catch (IOException e) {
+                log.warn("Failed to close expired session {}: {}", session.getId(), e.getMessage());
+            }
+            return;
+        }
         SignalMessage msg;
         try {
             msg = mapper.readValue(message.getPayload(), SignalMessage.class);
@@ -142,24 +162,20 @@ public class SignalingHandler extends TextWebSocketHandler {
             return;
         }
 
-        // Reject if the room is at capacity cluster-wide — unless this peer is
-        // already a member (reconnect). On the Redis backplane this read-then-
-        // register pair is not atomic; simultaneous joins on different nodes can
-        // briefly overshoot the cap (see RedisBackplane).
+        // Read the (ghost-pruned) membership for the peers reply, then let the
+        // backplane make the capacity decision atomically — reconnects of an
+        // existing member always pass.
         List<PeerInfo> clusterPeers = backplane.peersIn(msg.room());
-        List<String> current = clusterPeers.stream().map(PeerInfo::id).toList();
-        if (current.size() >= maxRoomSize && !current.contains(msg.from())) {
-            log.info("Rejected {} from full room {} ({}/{})",
-                    msg.from(), msg.room(), current.size(), maxRoomSize);
+        String name = displayName(msg);
+        if (!backplane.tryRegister(msg.room(), msg.from(), name, maxRoomSize)) {
+            log.info("Rejected {} from full room {} (cap {})", msg.from(), msg.room(), maxRoomSize);
             send(session, new SignalMessage(
                     SignalMessage.TYPE_ROOM_FULL, msg.room(), null, msg.from(),
                     mapper.valueToTree(maxRoomSize)));
             return;
         }
 
-        String name = displayName(msg);
         rooms.join(msg.room(), msg.from(), name, session);
-        backplane.register(msg.room(), msg.from(), name);
         List<PeerInfo> existingPeers = clusterPeers.stream()
                 .filter(info -> !info.id().equals(msg.from()))
                 .toList();
@@ -185,6 +201,8 @@ public class SignalingHandler extends TextWebSocketHandler {
                 mapper.valueToTree(name));
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, joined));
         backplane.publishToRoom(msg.room(), msg.from(), joined);
+        outbox.ifAvailable(recorder -> recorder.record(
+                "participant.joined", "room", msg.room(), Map.of("peerId", msg.from(), "name", name)));
     }
 
     private void relayToPeer(WebSocketSession session, SignalMessage msg) {
@@ -247,6 +265,8 @@ public class SignalingHandler extends TextWebSocketHandler {
                 SignalMessage.TYPE_PEER_LEFT, location.room(), location.peerId(), null, null);
         rooms.othersIn(location.room(), location.peerId()).forEach(other -> send(other, left));
         backplane.publishToRoom(location.room(), location.peerId(), left);
+        outbox.ifAvailable(recorder -> recorder.record(
+                "participant.left", "room", location.room(), Map.of("peerId", location.peerId())));
     }
 
     private void sendError(WebSocketSession session, String room, String reason) {

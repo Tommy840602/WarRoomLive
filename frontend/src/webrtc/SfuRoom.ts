@@ -27,7 +27,9 @@ export interface MediaRoom {
  * existing peer-keyed UI state.
  */
 export class SfuRoom implements MediaRoom {
-  private readonly room = new Room()
+  // adaptiveStream: subscribed video resolution follows the rendered tile size;
+  // dynacast: the SFU pauses simulcast layers nobody is subscribed to.
+  private readonly room = new Room({ adaptiveStream: true, dynacast: true })
   /** One synthetic MediaStream per remote identity, feeding the existing VideoTile UI. */
   private readonly remoteStreams = new Map<string, MediaStream>()
 
@@ -66,7 +68,12 @@ export class SfuRoom implements MediaRoom {
       const audio = this.localStream.getAudioTracks()[0]
       const video = this.localStream.getVideoTracks()[0]
       if (audio) await this.room.localParticipant.publishTrack(audio, { source: Track.Source.Microphone })
-      if (video) await this.room.localParticipant.publishTrack(video, { source: Track.Source.Camera })
+      if (video) {
+        await this.room.localParticipant.publishTrack(video, {
+          source: Track.Source.Camera,
+          simulcast: true, // multiple encodings; receivers pick per bandwidth
+        })
+      }
     } catch (e) {
       this.events.onError?.(`SFU 連線失敗:${e instanceof Error ? e.message : String(e)}`)
     }
@@ -104,6 +111,8 @@ export class SfuRoom implements MediaRoom {
 export interface MediaConfig {
   mode: 'sfu' | 'mesh'
   livekitUrl: string
+  /** STUN/TURN servers for mesh-mode RTCPeerConnections (TURN when configured). */
+  iceServers?: RTCIceServer[]
 }
 
 const authHeaders = (token?: string | null): HeadersInit =>

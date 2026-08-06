@@ -1,0 +1,38 @@
+# Alert rules for the observability overlay. Local/dev thresholds — tune per
+# environment before wiring a real Alertmanager.
+groups:
+  - name: warroomlive
+    rules:
+      - alert: ScrapeTargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} metrics target is down"
+
+      - alert: EventOutboxBacklogGrowing
+        expr: warroomlive_events_backlog > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox backlog above 100 for 5m — broker down or publisher stuck"
+
+      - alert: CollabRejectionsSpiking
+        expr: rate(collab_rejections_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Collab connections being rejected (limits/auth) at >1/s"
+
+      - alert: SignalingProcessingSlow
+        expr: |
+          rate(warroomlive_signaling_message_processing_seconds_sum[5m])
+            / clamp_min(rate(warroomlive_signaling_message_processing_seconds_count[5m]), 1e-9) > 0.02
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mean signaling processing above 20ms (blueprint SLO)"

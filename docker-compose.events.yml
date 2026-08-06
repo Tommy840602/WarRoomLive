@@ -1,0 +1,55 @@
+# Opt-in event-backbone overlay: business events flow through a transactional
+# outbox into Redpanda (Kafka-compatible).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.events.yml up --build
+#
+# The backend adds the 'kafka' profile: chat messages commit together with a
+# chat.message.created row in outbox_events, and OutboxPublisher ships pending
+# rows to topic ${EVENTS_TOPIC:-warroom.events} (at-least-once — consumers must
+# dedupe on eventId). A broker outage only grows the outbox backlog (visible as
+# warroomlive_events_backlog in Prometheus); publishing catches up in order once
+# the broker returns. Inspect events with:
+#   docker compose -f docker-compose.yml -f docker-compose.events.yml \
+#     exec redpanda rpk topic consume warroom.events --num 5
+# Composes with the other overlays (oidc, sfu, scale, observability, tls).
+services:
+  redpanda:
+    image: redpandadata/redpanda:v26.2.1
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+
+  backend:
+    environment:
+      SPRING_PROFILES_ACTIVE: postgres,kafka
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    depends_on:
+      db:
+        condition: service_healthy
+      redpanda:
+        condition: service_started
+
+  collab:
+    environment:
+      EVENTS_ENABLED: "true"
+
+  # Example consumer: builds the audit_log and message_search read models
+  # (served by GET /api/search/messages), deduping on eventId.
+  indexer:
+    build: ./indexer
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: warroomlive
+      DB_USER: warroomlive
+      DB_PASSWORD: warroomlive
+    depends_on:
+      db:
+        condition: service_healthy
+      redpanda:
+        condition: service_started

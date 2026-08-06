@@ -15,11 +15,11 @@
 ## 演進順序(建議)
 
 1. ~~**CRDT 平面強化**~~ ✅ 已完成:awareness 節流(~25 Hz)、update 大小上限(512 KB)、文件尺寸上限(5 MB)、每連線訊息速率上限(120/s)、`collab_update` 日誌 + debounce 快照 compaction。
-2. **認證授權** ✅ 部分完成:OIDC Resource Server(`oidc` profile)、collab JWT 驗證、前端 PKCE 登入、`docker-compose.oidc.yml` overlay(devidp 為開發用 IdP,正式環境以 `OIDC_*` env 換成 Keycloak/Entra)。尚餘:token 過期後的 silent renew 與連線 re-auth、join/publish 逐事件授權(目前為連線層)、LiveKit token 簽發(隨 SFU 一起做)。
-3. **SFU 遷移** ✅ 部分完成:`docker-compose.sfu.yml` 疊加層導入 LiveKit,前端 `SfuRoom`(與 mesh 同介面,由後端 `/api/media/config` 決定模式)、後端房間限定 token 簽發、信令上限放寬到 50。尚餘:coturn/TURN fallback、simulcast/adaptive stream 調優、錄影。
-4. **水平擴展 backplane** ✅ 部分完成:`Backplane` 抽象(預設單機 no-op),`redis` profile 將成員目錄移入 Redis(節點心跳 + 惰性 ghost 清理)、跨節點訊息走 Pub/Sub;collab 以 `extension-redis` 多實例同步;`docker-compose.scale.yml` 跑 backend×2 + collab×2。尚餘:Kafka + transactional outbox(可靠業務事件)、房間上限的原子檢查(Lua)、Redis Cluster/Sentinel 高可用。
-5. **可觀測性** ✅ 部分完成:backend `/actuator/prometheus` + collab `/metrics`(連線數、訊息進出、處理耗時、CRDT update 速率/大小、房間人數),`docker-compose.observability.yml` 疊加層(Prometheus + Grafana)。尚餘:OpenTelemetry 分散式追蹤(OTLP)、WebRTC 品質指標(packet loss / RTT,可由 LiveKit Prometheus 端點接入)、告警規則。
-6. **資料層治理**:Flyway 管 schema(取代 `ddl-auto: update` 與 collab 服務的 `CREATE TABLE IF NOT EXISTS`)、訊息全文檢索(OpenSearch)按需求再進。
+2. **認證授權** ✅ 大致完成:OIDC Resource Server(`oidc` profile)、collab JWT 驗證、前端 PKCE 登入 + **silent renew**(refresh token 單次使用輪替)、WS **逐訊息 token 過期強制**(4401 切斷)、LiveKit token 簽發、`docker-compose.oidc.yml` overlay(devidp 為開發用 IdP,正式環境以 `OIDC_*` env 換成 Keycloak/Entra)。尚餘(刻意遞延):資源層級授權(部門/專案 ACL——需要先有那些領域物件)、真實 IdP 對接演練。
+3. **SFU 遷移** ✅ 大致完成:`docker-compose.sfu.yml` 疊加層導入 LiveKit,前端 `SfuRoom`(與 mesh 同介面,由後端 `/api/media/config` 決定模式)、後端房間限定 token 簽發、信令上限放寬到 50、**simulcast + adaptiveStream + dynacast**;mesh 路徑的 coturn/TURN fallback(`docker-compose.turn.yml`)。尚餘(刻意遞延):錄影(需 LiveKit Egress + 物件儲存)、TURN/TLS 443(需真實憑證)。
+4. **水平擴展 backplane** ✅ 部分完成:`Backplane` 抽象(預設單機 no-op),`redis` profile 將成員目錄移入 Redis(節點心跳 + 惰性 ghost 清理)、跨節點訊息走 Pub/Sub、房間上限原子化(本地 compute / Redis Lua);collab 以 `extension-redis` 多實例同步;`docker-compose.scale.yml` 跑 backend×2 + collab×2;**Kafka + transactional outbox**(`kafka` profile + Redpanda overlay,at-least-once + eventId 去重;事件:chat.message.created、participant.joined/left、document.snapshot.created)+ **消費端範例 `indexer/`**(audit_log 稽核軌跡 + message_search 全文檢索讀模型,`GET /api/search/messages`)。另有**事件信封契約**(`docs/contracts/warroom-event.schema.json`,indexer 以 ajv 強制,違約 = 毒訊息)。尚餘(刻意遞延):會議/權限類事件(等領域物件)、Redis Cluster/Sentinel 高可用(部署層)、託管 Schema Registry(多團隊時)、OpenSearch 取代 Postgres FTS(搜尋規模需求出現時)。
+5. **可觀測性** ✅ 大致完成:backend/collab/indexer Prometheus 指標、**OTLP 分散式追蹤 → Tempo**(overlay 啟用,Grafana datasource 已接)、**LiveKit WebRTC 品質指標**接入 scrape、**Grafana dashboard** 與**告警規則**(target down / backlog / 拒連 / 處理延遲 SLO)。尚餘:Alertmanager 通知路由、更完整的 dashboard 面板。
+6. **資料層治理** ✅ 部分完成:Flyway 管 schema(V1 聊天、V2 collab 表;Hibernate 改 `validate`,既有資料庫 baseline 接軌)。尚餘:訊息全文檢索(OpenSearch)按需求再進。
 
 ## 原則(照藍圖)
 

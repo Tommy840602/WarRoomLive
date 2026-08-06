@@ -33,6 +33,12 @@ warroomlive:
     livekit-url: ${LIVEKIT_URL:}
     livekit-api-key: ${LIVEKIT_API_KEY:}
     livekit-api-secret: ${LIVEKIT_API_SECRET:}
+    # ICE servers handed to mesh-mode browsers. TURN kicks in when all three
+    # TURN_* variables are set (see docker-compose.turn.yml).
+    stun-urls: ${STUN_URLS:stun:stun.l.google.com:19302}
+    turn-urls: ${TURN_URLS:}
+    turn-username: ${TURN_USERNAME:}
+    turn-password: ${TURN_PASSWORD:}
 
 # Metrics/health for scraping. nginx does not proxy /actuator, so these stay
 # internal to the compose network (the observability overlay's Prometheus).
@@ -41,6 +47,15 @@ management:
     web:
       exposure:
         include: health,prometheus
+  # OTLP tracing is opt-in (observability overlay sets TRACING_ENABLED=true and
+  # points the endpoint at Tempo); disabled it costs nothing.
+  tracing:
+    enabled: ${TRACING_ENABLED:false}
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: ${OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
   health:
     redis:
       # The Redis starter is on the classpath for the 'redis' profile; without that

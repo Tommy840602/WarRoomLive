@@ -75,6 +75,31 @@ jobs:
       - name: Syntax check
         run: node --check server.js
 
+  indexer:
+    name: Indexer (Node 20)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: indexer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: indexer/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Syntax check
+        run: node --check server.js
+
+      - name: Contract copy in sync
+        run: diff warroom-event.schema.json ../docs/contracts/warroom-event.schema.json
+
   devidp:
     name: Dev IdP (Node 20)
     runs-on: ubuntu-latest

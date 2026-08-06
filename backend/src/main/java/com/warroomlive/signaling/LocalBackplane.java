@@ -4,22 +4,24 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Single-node backplane: the cluster is this process, so the directory delegates
- * to {@link RoomManager} and cross-node publishing is a no-op (the handler has
- * already delivered to every relevant local session).
+ * Single-node backplane. Owns the membership directory (mirroring what
+ * {@link RoomManager} tracks alongside the live sessions) so that the capacity
+ * decision in {@link #tryRegister} is atomic: the per-room map is swapped via
+ * {@code ConcurrentHashMap.compute}, which serializes concurrent joins to the
+ * same room. Cross-node publishing is a no-op — there are no other nodes.
  */
 @Component
 @Profile("!redis")
 public class LocalBackplane implements Backplane {
 
-    private final RoomManager rooms;
-
-    public LocalBackplane(RoomManager rooms) {
-        this.rooms = rooms;
-    }
+    /** room -> (peer id -> display name) */
+    private final Map<String, Map<String, String>> directory = new ConcurrentHashMap<>();
 
     @Override
     public void start(LocalDelivery delivery) {
@@ -28,22 +30,39 @@ public class LocalBackplane implements Backplane {
 
     @Override
     public List<PeerInfo> peersIn(String room) {
-        return rooms.peersIn(room);
+        Map<String, String> members = directory.get(room);
+        return members == null
+                ? List.of()
+                : members.entrySet().stream().map(e -> new PeerInfo(e.getKey(), e.getValue())).toList();
     }
 
     @Override
-    public void register(String room, String peerId, String name) {
-        // Membership already lives in RoomManager via the handler's local join.
+    public boolean tryRegister(String room, String peerId, String name, int maxRoomSize) {
+        AtomicBoolean accepted = new AtomicBoolean(false);
+        directory.compute(room, (r, members) -> {
+            Map<String, String> next = members != null ? members : new ConcurrentHashMap<>();
+            if (next.size() >= maxRoomSize && !next.containsKey(peerId)) {
+                return members; // full; leave untouched (null stays null)
+            }
+            next.put(peerId, name);
+            accepted.set(true);
+            return next;
+        });
+        return accepted.get();
     }
 
     @Override
     public void unregister(String room, String peerId) {
-        // Removed together with the local session.
+        directory.computeIfPresent(room, (r, members) -> {
+            members.remove(peerId);
+            return members.isEmpty() ? null : members;
+        });
     }
 
     @Override
     public Optional<String> nodeOf(String room, String peerId) {
-        return rooms.session(room, peerId).map(s -> "self");
+        Map<String, String> members = directory.get(room);
+        return members != null && members.containsKey(peerId) ? Optional.of("self") : Optional.empty();
     }
 
     @Override
@@ -58,11 +77,11 @@ public class LocalBackplane implements Backplane {
 
     @Override
     public int roomCount() {
-        return rooms.roomCount();
+        return directory.size();
     }
 
     @Override
     public int memberCount() {
-        return rooms.memberCount();
+        return directory.values().stream().mapToInt(Map::size).sum();
     }
 }

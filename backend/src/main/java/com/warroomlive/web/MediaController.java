@@ -13,7 +13,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -35,14 +37,30 @@ public class MediaController {
     private final String livekitUrl;
     private final String apiKey;
     private final String apiSecret;
+    private final List<Map<String, Object>> iceServers;
 
     public MediaController(
             @Value("${warroomlive.media.livekit-url:}") String livekitUrl,
             @Value("${warroomlive.media.livekit-api-key:}") String apiKey,
-            @Value("${warroomlive.media.livekit-api-secret:}") String apiSecret) {
+            @Value("${warroomlive.media.livekit-api-secret:}") String apiSecret,
+            @Value("${warroomlive.media.stun-urls:stun:stun.l.google.com:19302}") String stunUrls,
+            @Value("${warroomlive.media.turn-urls:}") String turnUrls,
+            @Value("${warroomlive.media.turn-username:}") String turnUsername,
+            @Value("${warroomlive.media.turn-password:}") String turnPassword) {
         this.livekitUrl = livekitUrl;
         this.apiKey = apiKey;
         this.apiSecret = apiSecret;
+        List<Map<String, Object>> servers = new ArrayList<>();
+        if (!stunUrls.isBlank()) {
+            servers.add(Map.of("urls", List.of(stunUrls.split("\\s*,\\s*"))));
+        }
+        if (!turnUrls.isBlank() && !turnUsername.isBlank() && !turnPassword.isBlank()) {
+            servers.add(Map.of(
+                    "urls", List.of(turnUrls.split("\\s*,\\s*")),
+                    "username", turnUsername,
+                    "credential", turnPassword));
+        }
+        this.iceServers = List.copyOf(servers);
     }
 
     private boolean sfuEnabled() {
@@ -53,7 +71,8 @@ public class MediaController {
     public Map<String, Object> config() {
         return Map.of(
                 "mode", sfuEnabled() ? "sfu" : "mesh",
-                "livekitUrl", sfuEnabled() ? livekitUrl : "");
+                "livekitUrl", sfuEnabled() ? livekitUrl : "",
+                "iceServers", iceServers);
     }
 
     @GetMapping("/token")

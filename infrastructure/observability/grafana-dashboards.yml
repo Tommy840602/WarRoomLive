@@ -1,0 +1,9 @@
+# Provisions the WarRoomLive overview dashboard from disk.
+apiVersion: 1
+
+providers:
+  - name: warroomlive
+    folder: WarRoomLive
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
