@@ -1,0 +1,27 @@
+# Opt-in backup overlay: turns on WAL archiving so point-in-time recovery is
+# possible, and adds a shared volume that holds base backups + archived WAL.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.backup.yml up -d
+#   tests/dr/backup.sh          # take a base backup
+#   tests/dr/restore-drill.sh   # full PITR drill (see docs/runbooks/disaster-recovery.md)
+#
+# Local/dev shape of the blueprint's Multi-AZ + PITR + WAL-archive posture; in
+# production the archive_command ships WAL to object storage instead of a volume.
+services:
+  db:
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /backups/wal/%f && cp %p /backups/wal/%f
+      - -c
+      - archive_timeout=60
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - backups:/backups
+
+volumes:
+  backups:
