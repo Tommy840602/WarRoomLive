@@ -1,0 +1,41 @@
+# Opt-in Redis high availability for the scaled stack: master + replica watched
+# by three Sentinels (quorum 2). Apply ON TOP of the scale overlay:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml \
+#     -f docker-compose.ha.yml up --build
+#
+# Backend (Lettuce) and collab (ioredis) discover the current master through
+# Sentinel, so killing the master promotes the replica (~5-15s) and signaling /
+# CRDT sync resume without restarting anything. Drill: tests/ha/failover-drill.sh.
+services:
+  # The scale overlay's `redis` becomes the initial master.
+  redis:
+    command: redis-server --replica-announce-ip redis
+
+  redis-replica:
+    image: redis:7-alpine
+    command: redis-server --replicaof redis 6379 --replica-announce-ip redis-replica
+    depends_on:
+      - redis
+
+  sentinel-1: &sentinel
+    image: redis:7-alpine
+    entrypoint: ["/bin/sh", "-c",
+      "cp /etc/sentinel.conf /tmp/sentinel.conf && exec redis-sentinel /tmp/sentinel.conf"]
+    volumes:
+      - ./infrastructure/redis/sentinel.conf:/etc/sentinel.conf:ro
+    depends_on:
+      - redis
+      - redis-replica
+
+  sentinel-2: *sentinel
+  sentinel-3: *sentinel
+
+  backend:
+    environment:
+      SPRING_PROFILES_ACTIVE: postgres,redis,redisha
+
+  collab:
+    environment:
+      REDIS_SENTINEL_NODES: sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
+      REDIS_SENTINEL_MASTER: warroom

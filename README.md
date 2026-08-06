@@ -113,6 +113,19 @@ docker compose -f docker-compose.yml -f docker-compose.scale.yml up --build
 - **nginx 輪詢**:`/api`、`/ws`、`/ws/doc` 皆改為請求時 DNS 解析,docker DNS 將新連線輪流導向各副本;WebSocket 連線建立後黏在該副本上。
 - **房間上限為原子判斷**:單機以 per-room `compute` 序列化、叢集以 Redis Lua script(計數 + 條件寫入一步完成),多節點同時加入也不會超額。
 
+## Redis 高可用(選用疊加層,疊在水平擴展之上):Sentinel 自動故障轉移
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.scale.yml \
+  -f docker-compose.ha.yml up --build
+# Redis master + replica + 3 Sentinel(quorum 2);殺掉 master 約 5–15 秒自動升級
+```
+
+- **拓撲**:`redis`(初始 master)+ `redis-replica` + `sentinel-1/2/3`(`infrastructure/redis/sentinel.conf`,`down-after 5s`、`failover-timeout 15s`,hostname 模式)。單靠 scale 疊加層時 Redis 是單點,此疊加層補上這一塊。
+- **後端(Lettuce)**:`redisha` profile(`application-redisha.yml`)改用 `spring.data.redis.sentinel.*`,透過 Sentinel 詢問當前 master,故障轉移後自動跟隨新 master;信令、房間目錄、心跳不需重啟即恢復。
+- **collab(ioredis)**:`REDIS_SENTINEL_NODES` 設定後 `extension-redis` 改走 Sentinel 連線,CRDT 跨實例同步同樣自動跟隨。
+- **演練**:`sh tests/ha/failover-drill.sh`(先 `npm --prefix tests/ha ci`)— 建立跨節點聊天與 CRDT 基線 → `docker kill` master → 驗證 Sentinel 升級 replica、既有連線恢復、新加入與 CRDT 同步全部繼續;演練後 `up -d` 會把舊 master 以 replica 身分接回。
+
 ## 事件骨幹(選用疊加層):Transactional Outbox + Redpanda
 
 ```bash
