@@ -1,0 +1,33 @@
+# Opt-in observability overlay: Prometheus scraping the backend
+# (/actuator/prometheus) and collab (/metrics) services, plus Grafana with the
+# datasource pre-provisioned (anonymous admin — local/dev use).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
+#   Prometheus: http://localhost:9090   Grafana: http://localhost:3000
+#
+# Composes with the other overlays (oidc, tls, sfu) — metrics endpoints are open
+# at the Spring/collab layer but never proxied by nginx, so they remain
+# unreachable from outside the compose network either way.
+services:
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    volumes:
+      - ./infrastructure/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - backend
+      - collab
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./infrastructure/observability/grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus

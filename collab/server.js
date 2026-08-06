@@ -19,6 +19,7 @@ import { Database } from '@hocuspocus/extension-database'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import * as Y from 'yjs'
 import pg from 'pg'
+import * as prom from 'prom-client'
 
 const port = Number(process.env.PORT ?? 1234)
 const MAX_UPDATE_BYTES = Number(process.env.COLLAB_MAX_UPDATE_BYTES ?? 512 * 1024)
@@ -61,6 +62,47 @@ try {
   console.warn(`collab service: PostgreSQL unavailable (${err.message}); documents are in-memory only`)
 }
 
+// --- Prometheus metrics, served at GET /metrics on the same listener. Like the
+// backend's /actuator, nginx does not proxy this path, so it stays internal to
+// the compose network (the observability overlay's Prometheus).
+prom.collectDefaultMetrics()
+const mUpdates = new prom.Counter({
+  name: 'collab_updates_total',
+  help: 'Yjs updates applied to documents',
+})
+const mUpdateBytes = new prom.Histogram({
+  name: 'collab_update_bytes',
+  help: 'Size of applied Yjs updates in bytes',
+  buckets: [64, 256, 1024, 4096, 16384, 65536, 262144, 1048576],
+})
+const mRejected = new prom.Counter({
+  name: 'collab_rejections_total',
+  help: 'Connections closed for violating a limit or failing authentication',
+  labelNames: ['reason'],
+})
+const mFetch = new prom.Histogram({
+  name: 'collab_fetch_seconds',
+  help: 'Time to load a document from Postgres (snapshot + log replay)',
+  buckets: [0.005, 0.02, 0.05, 0.1, 0.25, 1, 5],
+})
+const mStore = new prom.Histogram({
+  name: 'collab_store_seconds',
+  help: 'Time to store a snapshot and trim the update log',
+  buckets: [0.005, 0.02, 0.05, 0.1, 0.25, 1, 5],
+})
+
+/** Serves /metrics; any other request falls through to Hocuspocus's default. */
+const metricsEndpoint = {
+  async onRequest({ request, response }) {
+    if (request.url?.split('?')[0] === '/metrics') {
+      const body = await prom.register.metrics()
+      response.writeHead(200, { 'content-type': prom.register.contentType })
+      response.end(body)
+      throw null // short-circuit the remaining hooks and default handler
+    }
+  },
+}
+
 /** Approximate live size per document; corrected to the real snapshot size on store. */
 const docSizes = new Map()
 /** Highest collab_update id known to be covered by the in-memory doc, per document. */
@@ -89,15 +131,18 @@ function checkRate(socketId) {
 const guards = {
   async beforeHandleMessage({ documentName, update, socketId }) {
     if (!checkRate(socketId)) {
+      mRejected.inc({ reason: 'rate' })
       throw new Error(`rate limit exceeded on ${documentName} (${MAX_MESSAGES_PER_SECOND}/s)`)
     }
     if (update.byteLength > MAX_UPDATE_BYTES) {
+      mRejected.inc({ reason: 'update_size' })
       throw new Error(
         `update of ${update.byteLength} bytes on ${documentName} exceeds limit ${MAX_UPDATE_BYTES}`,
       )
     }
     const size = docSizes.get(documentName) ?? 0
     if (size + update.byteLength > MAX_DOC_BYTES) {
+      mRejected.inc({ reason: 'doc_size' })
       throw new Error(`document ${documentName} would exceed size limit ${MAX_DOC_BYTES}`)
     }
   },
@@ -109,7 +154,10 @@ const guards = {
 /** Appends every applied update to the durable log (crash safety between snapshots). */
 const updateLog = {
   async onChange({ documentName, update }) {
-    if (!pool || !update?.byteLength) return
+    if (!update?.byteLength) return
+    mUpdates.inc()
+    mUpdateBytes.observe(update.byteLength)
+    if (!pool) return
     docSizes.set(documentName, (docSizes.get(documentName) ?? 0) + update.byteLength)
     const { rows } = await pool.query(
       'INSERT INTO collab_update (name, data) VALUES ($1, $2) RETURNING id',
@@ -119,41 +167,50 @@ const updateLog = {
   },
 }
 
-const extensions = [guards]
+const extensions = [metricsEndpoint, guards, updateLog]
 if (pool) {
   extensions.push(
-    updateLog,
     new Database({
       fetch: async ({ documentName }) => {
-        const snapshot = (
-          await pool.query('SELECT data FROM collab_document WHERE name = $1', [documentName])
-        ).rows[0]?.data
-        const { rows } = await pool.query(
-          'SELECT id, data FROM collab_update WHERE name = $1 ORDER BY id',
-          [documentName],
-        )
-        if (rows.length > 0) lastLoggedId.set(documentName, rows[rows.length - 1].id)
-        const parts = [...(snapshot ? [snapshot] : []), ...rows.map((r) => r.data)]
-        if (parts.length === 0) return null
-        const merged = parts.length === 1 ? parts[0] : Y.mergeUpdates(parts)
-        docSizes.set(documentName, merged.byteLength)
-        return merged
+        const done = mFetch.startTimer()
+        try {
+          const snapshot = (
+            await pool.query('SELECT data FROM collab_document WHERE name = $1', [documentName])
+          ).rows[0]?.data
+          const { rows } = await pool.query(
+            'SELECT id, data FROM collab_update WHERE name = $1 ORDER BY id',
+            [documentName],
+          )
+          if (rows.length > 0) lastLoggedId.set(documentName, rows[rows.length - 1].id)
+          const parts = [...(snapshot ? [snapshot] : []), ...rows.map((r) => r.data)]
+          if (parts.length === 0) return null
+          const merged = parts.length === 1 ? parts[0] : Y.mergeUpdates(parts)
+          docSizes.set(documentName, merged.byteLength)
+          return merged
+        } finally {
+          done()
+        }
       },
       store: async ({ documentName, state }) => {
-        // Read before any await: inserts completing after this point stay in the
-        // log and are replayed on the next load (Yjs merges are idempotent).
-        const coveredId = lastLoggedId.get(documentName) ?? 0
-        await pool.query(
-          `INSERT INTO collab_document (name, data, updated_at)
-           VALUES ($1, $2, now())
-           ON CONFLICT (name) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
-          [documentName, state],
-        )
-        await pool.query('DELETE FROM collab_update WHERE name = $1 AND id <= $2', [
-          documentName,
-          coveredId,
-        ])
-        docSizes.set(documentName, state.byteLength)
+        const done = mStore.startTimer()
+        try {
+          // Read before any await: inserts completing after this point stay in the
+          // log and are replayed on the next load (Yjs merges are idempotent).
+          const coveredId = lastLoggedId.get(documentName) ?? 0
+          await pool.query(
+            `INSERT INTO collab_document (name, data, updated_at)
+             VALUES ($1, $2, now())
+             ON CONFLICT (name) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+            [documentName, state],
+          )
+          await pool.query('DELETE FROM collab_update WHERE name = $1 AND id <= $2', [
+            documentName,
+            coveredId,
+          ])
+          docSizes.set(documentName, state.byteLength)
+        } finally {
+          done()
+        }
       },
     }),
   )
@@ -176,12 +233,28 @@ const server = Server.configure({
   ...(oidcIssuer
     ? {
         async onAuthenticate({ token }) {
-          if (!token) throw new Error('missing access token')
-          const { payload } = await jwtVerify(token, jwks, { issuer: oidcIssuer })
-          return { user: payload.preferred_username ?? payload.sub }
+          try {
+            if (!token) throw new Error('missing access token')
+            const { payload } = await jwtVerify(token, jwks, { issuer: oidcIssuer })
+            return { user: payload.preferred_username ?? payload.sub }
+          } catch (err) {
+            mRejected.inc({ reason: 'auth' })
+            throw err
+          }
         },
       }
     : {}),
+})
+
+new prom.Gauge({
+  name: 'collab_connections_active',
+  help: 'Open WebSocket connections',
+  collect() { this.set(server.getConnectionsCount()) },
+})
+new prom.Gauge({
+  name: 'collab_documents_open',
+  help: 'Documents currently loaded in memory',
+  collect() { this.set(server.getDocumentsCount()) },
 })
 
 server.listen().then(() => {

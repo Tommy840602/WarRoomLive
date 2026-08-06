@@ -44,7 +44,9 @@ public class SecurityConfig {
         resolver.setAllowUriQueryParameter(true);
         http.csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/health", "/api/auth/config").permitAll()
+                        // /actuator is not proxied by nginx, so it stays reachable only
+                        // from inside the compose network (Prometheus scraper).
+                        .requestMatchers("/api/health", "/api/auth/config", "/actuator/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(rs -> rs
                         .bearerTokenResolver(resolver)

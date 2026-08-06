@@ -27,6 +27,14 @@ warroomlive:
     # How many recent messages to retain per room (in-memory) and replay on join.
     history-limit: 100
 
+# Metrics/health for scraping. nginx does not proxy /actuator, so these stay
+# internal to the compose network (the observability overlay's Prometheus).
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+
 logging:
   level:
     com.warroomlive: INFO

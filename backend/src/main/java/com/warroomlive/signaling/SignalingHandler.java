@@ -3,6 +3,8 @@ package com.warroomlive.signaling;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.warroomlive.chat.ChatRepository;
 import com.warroomlive.chat.StoredMessage;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * WebSocket endpoint that relays WebRTC signaling between peers sharing a room.
@@ -43,38 +46,55 @@ public class SignalingHandler extends TextWebSocketHandler {
     /** Wraps raw sessions so concurrent sends from multiple peers are serialized safely. */
     private final Map<String, ConcurrentWebSocketSessionDecorator> safeSessions = new ConcurrentHashMap<>();
 
+    private final MeterRegistry metrics;
+    private final AtomicInteger connectionsActive = new AtomicInteger();
+    private final Timer processingTimer;
+
     public SignalingHandler(
             RoomManager rooms,
             ObjectMapper mapper,
             ChatRepository chat,
+            MeterRegistry metrics,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-room-size:8}") int maxRoomSize,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.history-limit:100}") int historyLimit) {
         this.rooms = rooms;
         this.mapper = mapper;
         this.chat = chat;
+        this.metrics = metrics;
         this.maxRoomSize = maxRoomSize;
         this.historyLimit = historyLimit;
+        metrics.gauge("warroomlive.signaling.connections.active", connectionsActive);
+        this.processingTimer = Timer.builder("warroomlive.signaling.message.processing")
+                .description("Time spent handling one inbound signaling message")
+                .register(metrics);
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         safeSessions.put(session.getId(), new ConcurrentWebSocketSessionDecorator(
                 session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT_BYTES));
+        connectionsActive.incrementAndGet();
         log.debug("WebSocket connected: {}", session.getId());
     }
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+        processingTimer.record(() -> handleParsedMessage(session, message));
+    }
+
+    private void handleParsedMessage(WebSocketSession session, TextMessage message) {
         SignalMessage msg;
         try {
             msg = mapper.readValue(message.getPayload(), SignalMessage.class);
         } catch (Exception e) {
             log.warn("Dropping malformed signaling message from {}: {}", session.getId(), e.getMessage());
+            countIn("malformed");
             sendError(session, null, "malformed message");
             return;
         }
 
         if (msg.type() == null) {
+            countIn("malformed");
             sendError(session, null, "missing message type");
             return;
         }
@@ -87,8 +107,18 @@ public class SignalingHandler extends TextWebSocketHandler {
             case SignalMessage.TYPE_STATE, SignalMessage.TYPE_REACTION, SignalMessage.TYPE_HAND ->
                     broadcastToRoom(session, msg);
             case SignalMessage.TYPE_LEAVE -> handleLeave(session);
-            default -> sendError(session, msg.room(), "unsupported message type: " + msg.type());
+            default -> {
+                countIn("unsupported");
+                sendError(session, msg.room(), "unsupported message type: " + msg.type());
+                return;
+            }
         }
+        countIn(msg.type());
+    }
+
+    /** The inbound type tag is bounded: known protocol types plus malformed/unsupported. */
+    private void countIn(String type) {
+        metrics.counter("warroomlive.signaling.messages.in", "type", type).increment();
     }
 
     private void handleJoin(WebSocketSession session, SignalMessage msg) {
@@ -174,6 +204,7 @@ public class SignalingHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         safeSessions.remove(session.getId());
+        connectionsActive.decrementAndGet();
         rooms.remove(session).ifPresent(this::broadcastPeerLeft);
         log.debug("WebSocket closed: {} ({})", session.getId(), status);
     }
@@ -198,6 +229,7 @@ public class SignalingHandler extends TextWebSocketHandler {
         }
         try {
             sink.sendMessage(new TextMessage(mapper.writeValueAsString(message)));
+            metrics.counter("warroomlive.signaling.messages.out", "type", message.type()).increment();
         } catch (IOException e) {
             log.warn("Failed to send {} to {}: {}", message.type(), session.getId(), e.getMessage());
         }
