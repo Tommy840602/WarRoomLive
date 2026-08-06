@@ -14,6 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `devidp/` — DEV-ONLY OIDC provider (fixed users alice/bob, in-memory key) used by the `docker-compose.oidc.yml` overlay; production swaps it for Keycloak/Entra via the `OIDC_*` env vars. Never deploy it publicly.
 - `docs/architecture/roadmap.md` — phased plan mapping the target production tech stack onto this codebase; consult it before starting a new architectural increment.
 - `README.md` — architecture diagram and run instructions (keep in sync with this file).
+- `tests/load/` (k6, SLO thresholds) + `tests/chaos/` (Toxiproxy) — manual load/chaos suites against a running stack; results + found-and-fixed defects in `docs/runbooks/load-testing.md`. Not run in CI.
 - `AGENTS.md`, `.github/agents/` — workspace agent conventions.
 - `.github/workflows/ci.yml` — CI: runs `mvn verify` (backend) and `npm ci && npm run build` (frontend) on push/PR to `main`. Keep the toolchain versions here in step with the Java/Node versions above.
 - `docker-compose.yml` + `backend/Dockerfile` + `frontend/Dockerfile` (nginx, `frontend/nginx.conf`) + `collab/Dockerfile` — full-stack deploy (`docker compose up --build`, opens on `:8088`). The frontend nginx reverse-proxies `/api` and `/ws` to `backend:8080` and `/ws/doc` to `collab:1234`, so the browser uses a single origin; the backend runs the `postgres` profile against the `db` service and the collab service persists to the same `db`. CI does not build images — verify Docker changes by running the stack.

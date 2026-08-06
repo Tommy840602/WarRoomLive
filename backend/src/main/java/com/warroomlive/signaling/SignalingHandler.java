@@ -287,16 +287,22 @@ public class SignalingHandler extends TextWebSocketHandler {
     }
 
     private void send(WebSocketSession session, SignalMessage message) {
-        WebSocketSession target = safeSessions.getOrDefault(session.getId(), null);
-        WebSocketSession sink = target != null ? target : session;
-        if (!sink.isOpen()) {
+        // Only ever write through the concurrency decorator. If it is already gone
+        // (session mid-close), drop the message — falling back to the raw session
+        // would interleave frames from multiple threads (TEXT_PARTIAL_WRITING).
+        WebSocketSession sink = safeSessions.get(session.getId());
+        if (sink == null || !sink.isOpen()) {
             return;
         }
         try {
             sink.sendMessage(new TextMessage(mapper.writeValueAsString(message)));
             metrics.counter("warroomlive.signaling.messages.out", "type", message.type()).increment();
-        } catch (IOException e) {
-            log.warn("Failed to send {} to {}: {}", message.type(), session.getId(), e.getMessage());
+        } catch (IOException | IllegalStateException e) {
+            // IllegalStateException = the session closed between the isOpen check
+            // and the write. Both are per-recipient races; they must never
+            // propagate, or the *sender's* connection gets torn down with 1011.
+            log.debug("Dropped {} to closing session {}: {}",
+                    message.type(), session.getId(), e.getMessage());
         }
     }
 
