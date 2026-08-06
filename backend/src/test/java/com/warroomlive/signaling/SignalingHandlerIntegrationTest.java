@@ -54,6 +54,12 @@ class SignalingHandlerIntegrationTest {
         assertThat(alicePeers.type()).isEqualTo("peers");
         assertThat(mapper.convertValue(alicePeers.payload(), List.class)).isEmpty();
 
+        // Opening the room makes Alice the host; the meta state follows the peers list.
+        SignalMessage aliceState = alice.take();
+        assertThat(aliceState.type()).isEqualTo("room-state");
+        assertThat(aliceState.payload().get("host").asText()).isEqualTo("alice");
+        assertThat(aliceState.payload().get("locked").asBoolean()).isFalse();
+
         // Bob joins the same room.
         RecordingHandler bob = new RecordingHandler();
         WebSocketSession bobSession = client
@@ -67,6 +73,7 @@ class SignalingHandlerIntegrationTest {
         List<PeerInfo> peers = mapper.convertValue(
                 bobPeers.payload(), new TypeReference<List<PeerInfo>>() {});
         assertThat(peers).containsExactly(new PeerInfo("alice", "Alice"));
+        assertThat(bob.take().type()).isEqualTo("room-state");
 
         // Alice is notified that Bob arrived, carrying his name.
         SignalMessage aliceNotice = alice.take();
@@ -108,11 +115,14 @@ class SignalingHandlerIntegrationTest {
         assertThat(reaction.from()).isEqualTo("alice");
         assertThat(mapper.convertValue(reaction.payload(), String.class)).isEqualTo("🎉");
 
-        // When Alice disconnects, Bob is told she left.
+        // When Alice disconnects, Bob is told she left — and inherits the host role.
         aliceSession.close(CloseStatus.NORMAL);
         SignalMessage bobNotice = bob.take();
         assertThat(bobNotice.type()).isEqualTo("peer-left");
         assertThat(bobNotice.from()).isEqualTo("alice");
+        SignalMessage handover = bob.take();
+        assertThat(handover.type()).isEqualTo("room-state");
+        assertThat(handover.payload().get("host").asText()).isEqualTo("bob");
 
         // A peer joining later receives the room's persisted chat history.
         RecordingHandler carol = new RecordingHandler();
@@ -121,6 +131,7 @@ class SignalingHandlerIntegrationTest {
         carolSession.sendMessage(text(new SignalMessage(
                 "join", "room-1", "carol", null, mapper.valueToTree("Carol"))));
         assertThat(carol.take().type()).isEqualTo("peers");
+        assertThat(carol.take().type()).isEqualTo("room-state");
         SignalMessage history = carol.take();
         assertThat(history.type()).isEqualTo("history");
         List<StoredMessage> stored = mapper.convertValue(

@@ -9,13 +9,22 @@ export interface Member {
 
 interface MemberListProps {
   members: Member[]
+  /** Peer id of the room's current host ('' while unknown). */
+  hostId?: string
+  /** Whether the room is locked to newcomers (shown in the title). */
+  locked?: boolean
+  /** True when the viewer is the host — enables the kick buttons. */
+  canKick?: boolean
+  onKick?: (peerId: string) => void
 }
 
 /** Sidebar list of everyone currently in the room, self first. */
-export function MemberList({ members }: MemberListProps) {
+export function MemberList({ members, hostId, locked, canKick, onKick }: MemberListProps) {
   return (
     <aside className="members">
-      <h2 className="members__title">成員 ({members.length})</h2>
+      <h2 className="members__title">
+        成員 ({members.length}){locked && <span aria-label="房間已鎖定"> 🔒</span>}
+      </h2>
       <ul className="members__list">
         {members.map((m) => (
           <li key={m.id} className="members__item">
@@ -23,12 +32,27 @@ export function MemberList({ members }: MemberListProps) {
             <span className="members__avatar">{initial(m.name)}</span>
             <span className="members__name">
               {m.name}
+              {m.id === hostId && (
+                <span className="members__host" aria-label="主持人" title="主持人">
+                  👑
+                </span>
+              )}
               {m.isSelf && <span className="members__you">(你)</span>}
             </span>
             <span className="members__status">
               {m.handRaised && <span aria-label="舉手">✋</span>}
               {m.audioOff && <span aria-label="靜音">🔇</span>}
               {m.videoOff && <span aria-label="關閉視訊">📷</span>}
+              {canKick && !m.isSelf && (
+                <button
+                  className="members__kick"
+                  aria-label={`移出 ${m.name}`}
+                  title="移出會議室"
+                  onClick={() => onKick?.(m.id)}
+                >
+                  ✕
+                </button>
+              )}
             </span>
           </li>
         ))}

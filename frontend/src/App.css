@@ -296,6 +296,27 @@
   font-size: 0.75rem;
 }
 
+.members__host {
+  margin-left: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.members__kick {
+  padding: 0 0.4rem;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #9aa0a6;
+  font-size: 0.85rem;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.members__kick:hover {
+  background: #5f2120;
+  color: #f28b82;
+}
+
 .auth {
   display: flex;
   flex-direction: column;

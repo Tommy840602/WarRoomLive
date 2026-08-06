@@ -14,7 +14,7 @@ import { CollabPanel } from './components/CollabPanel'
 import { MemberList, type Member } from './components/MemberList'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
-import type { MediaState, PeerInfo, StoredMessage } from './signaling/types'
+import type { MediaState, PeerInfo, RoomStateInfo, StoredMessage } from './signaling/types'
 import { useAuth } from './auth/AuthGate'
 import './App.css'
 
@@ -53,6 +53,7 @@ export default function App() {
   const [reactions, setReactions] = useState<FloatingReaction[]>([])
   const [mediaMode, setMediaMode] = useState<'mesh' | 'sfu'>('mesh')
   const [recordingId, setRecordingId] = useState<string | null>(null)
+  const [roomState, setRoomState] = useState<RoomStateInfo>({ host: '', locked: false })
 
   const clientRef = useRef<SignalingClient | null>(null)
   const roomRef = useRef<MediaRoom | null>(null)
@@ -123,6 +124,7 @@ export default function App() {
     setHandRaised(false)
     setRaisedHands(new Set())
     setReactions([])
+    setRoomState({ host: '', locked: false })
     mediaStateRef.current = { audio: true, video: true }
     handRaisedRef.current = false
     setStatus('idle')
@@ -182,6 +184,16 @@ export default function App() {
       client.on('room-full', (msg) => {
         teardown()
         setError(`房間已滿(上限 ${msg.payload} 人),請換一個房間或稍後再試`)
+      })
+      // Room meta: who hosts and whether newcomers are locked out.
+      client.on('room-state', (msg) => setRoomState(msg.payload as RoomStateInfo))
+      client.on('room-locked', () => {
+        teardown()
+        setError('房間已被主持人鎖定,目前不開放加入')
+      })
+      client.on('kicked', () => {
+        teardown()
+        setError('你已被主持人移出會議室')
       })
       client.on('reaction', (msg) => showReaction(String(msg.payload)))
       client.on('hand', (msg) => {
@@ -311,6 +323,26 @@ export default function App() {
     clientRef.current?.send({ type: 'hand', room, from: selfIdRef.current, payload: next })
   }, [handRaised, room])
 
+  const isHost = roomState.host === selfIdRef.current
+
+  /** Host only: lock or unlock the room to newcomers (server re-validates). */
+  const toggleLock = useCallback(() => {
+    clientRef.current?.send({
+      type: 'lock',
+      room,
+      from: selfIdRef.current,
+      payload: !roomState.locked,
+    })
+  }, [room, roomState.locked])
+
+  /** Host only: remove a participant (server re-validates and closes their socket). */
+  const kickPeer = useCallback(
+    (peerId: string) => {
+      clientRef.current?.send({ type: 'kick', room, from: selfIdRef.current, to: peerId })
+    },
+    [room],
+  )
+
   const stopScreenShare = useCallback(() => {
     const camera = cameraStreamRef.current
     if (roomRef.current && camera?.getVideoTracks()[0]) {
@@ -422,6 +454,11 @@ export default function App() {
                 {recordingId ? '🔴 停止錄影' : '錄影'}
               </button>
             )}
+            {isHost && (
+              <button className="btn-secondary" onClick={toggleLock}>
+                {roomState.locked ? '🔓 解除鎖定' : '🔒 鎖定房間'}
+              </button>
+            )}
             <button onClick={leave}>離開房間</button>
           </>
         ) : (
@@ -467,7 +504,15 @@ export default function App() {
           ))}
         </div>
         <div className="sidebar">
-          {status === 'in-room' && <MemberList members={members} />}
+          {status === 'in-room' && (
+            <MemberList
+              members={members}
+              hostId={roomState.host}
+              locked={roomState.locked}
+              canKick={isHost}
+              onKick={kickPeer}
+            />
+          )}
           <ChatPanel
             messages={messages.map((m) => ({
               id: m.id,

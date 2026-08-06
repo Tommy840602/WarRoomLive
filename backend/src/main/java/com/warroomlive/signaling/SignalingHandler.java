@@ -85,6 +85,12 @@ public class SignalingHandler extends TextWebSocketHandler {
         backplane.start(new Backplane.LocalDelivery() {
             @Override
             public void toPeer(String room, String peerId, SignalMessage message) {
+                // A kick may originate on another node; the node hosting the target
+                // must also close the connection, not just deliver the notice.
+                if (SignalMessage.TYPE_KICKED.equals(message.type())) {
+                    rooms.session(room, peerId).ifPresent(s -> deliverKickAndClose(s, message));
+                    return;
+                }
                 rooms.session(room, peerId).ifPresent(s -> send(s, message));
             }
 
@@ -146,6 +152,8 @@ public class SignalingHandler extends TextWebSocketHandler {
             case SignalMessage.TYPE_CHAT -> handleChat(session, msg);
             case SignalMessage.TYPE_STATE, SignalMessage.TYPE_REACTION, SignalMessage.TYPE_HAND ->
                     broadcastToRoom(session, msg);
+            case SignalMessage.TYPE_LOCK -> handleLock(session, msg);
+            case SignalMessage.TYPE_KICK -> handleKick(session, msg);
             case SignalMessage.TYPE_LEAVE -> handleLeave(session);
             default -> {
                 countIn("unsupported");
@@ -184,6 +192,15 @@ public class SignalingHandler extends TextWebSocketHandler {
                     Map.of("peerId", msg.from(), "reason", "room_full", "capacity", maxRoomSize)));
             return;
         }
+        if (memberCount == Backplane.REGISTER_LOCKED) {
+            log.info("Rejected {} from locked room {}", msg.from(), msg.room());
+            send(session, new SignalMessage(
+                    SignalMessage.TYPE_ROOM_LOCKED, msg.room(), null, msg.from(), null));
+            outbox.ifAvailable(recorder -> recorder.record(
+                    "participant.rejected", "room", msg.room(),
+                    Map.of("peerId", msg.from(), "reason", "room_locked")));
+            return;
+        }
 
         rooms.join(msg.room(), msg.from(), name, session);
         meetings.ifAvailable(tracker -> tracker.participantJoined(msg.room(), memberCount));
@@ -197,6 +214,9 @@ public class SignalingHandler extends TextWebSocketHandler {
         send(session, new SignalMessage(
                 SignalMessage.TYPE_PEERS, msg.room(), null, msg.from(),
                 mapper.valueToTree(existingPeers)));
+
+        // Tell the newcomer the room's meta state (who hosts, locked flag).
+        send(session, roomStateMessage(msg.room(), backplane.roomState(msg.room())));
 
         // Replay the room's recent chat so a refreshed or newly-joined peer has context.
         List<StoredMessage> history = chat.recent(msg.room(), historyLimit);
@@ -257,6 +277,98 @@ public class SignalingHandler extends TextWebSocketHandler {
         backplane.publishToRoom(msg.room(), msg.from(), msg);
     }
 
+    /**
+     * Privileged sender check: the message's claimed {@code from} must be the
+     * peer this session joined as, and that peer must currently host the room.
+     * Returns the acting host's id, or empty after sending the caller an error.
+     */
+    private Optional<String> requireHost(WebSocketSession session, SignalMessage msg) {
+        Optional<RoomManager.PeerLocation> location = rooms.locationOf(session);
+        if (location.isEmpty()
+                || !location.get().room().equals(msg.room())
+                || !location.get().peerId().equals(msg.from())) {
+            sendError(session, msg.room(), msg.type() + " sender does not match this connection");
+            return Optional.empty();
+        }
+        Backplane.RoomState state = backplane.roomState(msg.room());
+        if (!msg.from().equals(state.hostId())) {
+            sendError(session, msg.room(), "only the host can " + msg.type());
+            return Optional.empty();
+        }
+        return Optional.of(msg.from());
+    }
+
+    /** Host locks or unlocks the room to newcomers; everyone gets the new room-state. */
+    private void handleLock(WebSocketSession session, SignalMessage msg) {
+        if (isBlank(msg.room()) || isBlank(msg.from()) || msg.payload() == null || !msg.payload().isBoolean()) {
+            sendError(session, msg.room(), "lock requires 'room', 'from' and a boolean 'payload'");
+            return;
+        }
+        if (requireHost(session, msg).isEmpty()) {
+            return;
+        }
+        boolean locked = msg.payload().asBoolean();
+        backplane.setLocked(msg.room(), locked);
+        log.info("Room {} {} by host {}", msg.room(), locked ? "locked" : "unlocked", msg.from());
+        SignalMessage state = roomStateMessage(msg.room(), backplane.roomState(msg.room()));
+        rooms.othersIn(msg.room(), null).forEach(other -> send(other, state));
+        backplane.publishToRoom(msg.room(), null, state);
+        outbox.ifAvailable(recorder -> recorder.record(
+                locked ? "room.locked" : "room.unlocked", "room", msg.room(),
+                Map.of("by", msg.from())));
+    }
+
+    /** Host removes the peer named in {@code to}; its connection is closed with 4403. */
+    private void handleKick(WebSocketSession session, SignalMessage msg) {
+        if (isBlank(msg.room()) || isBlank(msg.from()) || isBlank(msg.to())) {
+            sendError(session, msg.room(), "kick requires 'room', 'from' and 'to'");
+            return;
+        }
+        if (msg.to().equals(msg.from())) {
+            sendError(session, msg.room(), "the host cannot kick itself");
+            return;
+        }
+        if (requireHost(session, msg).isEmpty()) {
+            return;
+        }
+        SignalMessage kicked = new SignalMessage(
+                SignalMessage.TYPE_KICKED, msg.room(), null, msg.to(), mapper.valueToTree(msg.from()));
+        Optional<WebSocketSession> target = rooms.session(msg.room(), msg.to());
+        if (target.isPresent()) {
+            deliverKickAndClose(target.get(), kicked);
+        } else if (backplane.nodeOf(msg.room(), msg.to()).isPresent()) {
+            // Hosted elsewhere: the target's node delivers the notice and closes.
+            backplane.publishToPeer(msg.room(), msg.to(), kicked);
+        } else {
+            sendError(session, msg.room(), "peer not found: " + msg.to());
+            return;
+        }
+        log.info("Peer {} kicked from room {} by host {}", msg.to(), msg.room(), msg.from());
+        outbox.ifAvailable(recorder -> recorder.record(
+                "participant.kicked", "room", msg.room(),
+                Map.of("peerId", msg.to(), "by", msg.from())));
+    }
+
+    /**
+     * Sends the kicked notice, then closes the connection (4403 mirrors HTTP 403).
+     * Membership cleanup and the peer-left broadcast ride the close path.
+     */
+    private void deliverKickAndClose(WebSocketSession session, SignalMessage kicked) {
+        send(session, kicked);
+        try {
+            session.close(new CloseStatus(4403, "removed by host"));
+        } catch (IOException e) {
+            log.warn("Failed to close kicked session {}: {}", session.getId(), e.getMessage());
+        }
+    }
+
+    private SignalMessage roomStateMessage(String room, Backplane.RoomState state) {
+        return new SignalMessage(SignalMessage.TYPE_ROOM_STATE, room, null, null,
+                mapper.valueToTree(Map.of(
+                        "host", state.hostId() == null ? "" : state.hostId(),
+                        "locked", state.locked())));
+    }
+
     private void handleLeave(WebSocketSession session) {
         rooms.remove(session).ifPresent(location -> broadcastPeerLeft(location));
     }
@@ -276,6 +388,14 @@ public class SignalingHandler extends TextWebSocketHandler {
                 SignalMessage.TYPE_PEER_LEFT, location.room(), location.peerId(), null, null);
         rooms.othersIn(location.room(), location.peerId()).forEach(other -> send(other, left));
         backplane.publishToRoom(location.room(), location.peerId(), left);
+        if (remaining > 0) {
+            // The departing peer may have been the host; re-broadcast the (possibly
+            // handed-over) room state so everyone agrees on who hosts now.
+            SignalMessage state = roomStateMessage(
+                    location.room(), backplane.roomState(location.room()));
+            rooms.othersIn(location.room(), location.peerId()).forEach(other -> send(other, state));
+            backplane.publishToRoom(location.room(), location.peerId(), state);
+        }
         outbox.ifAvailable(recorder -> recorder.record(
                 "participant.left", "room", location.room(), Map.of("peerId", location.peerId())));
         meetings.ifAvailable(tracker -> tracker.participantLeft(location.room(), remaining));
