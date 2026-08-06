@@ -1,0 +1,34 @@
+# Opt-in SFU overlay: media routes through LiveKit instead of the browser mesh,
+# so upload bandwidth stops scaling with room size and rooms can grow beyond 8.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sfu.yml up --build
+#
+# The backend advertises SFU mode via /api/media/config and signs room-scoped
+# LiveKit tokens at /api/media/token; the signaling WebSocket keeps carrying
+# membership, chat, reactions and media-state exactly as in mesh mode.
+# Composes with the oidc/observability/tls overlays.
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.5
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./infrastructure/livekit/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7881:7881"       # ICE over TCP
+      - "7882:7882/udp"   # ICE over UDP (port-muxed)
+
+  backend:
+    environment:
+      # Path-style URL: the frontend resolves it against the page origin and
+      # nginx proxies /livekit to the SFU, keeping the single-origin setup.
+      LIVEKIT_URL: /livekit
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: devkey_secret_needs_at_least_32_bytes
+      # The mesh cap no longer applies to media; raise the signaling-room limit.
+      WARROOMLIVE_SIGNALING_MAX_ROOM_SIZE: "50"
+
+  frontend:
+    depends_on:
+      - backend
+      - collab
+      - livekit

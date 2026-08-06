@@ -1,0 +1,143 @@
+import {
+  Room,
+  RoomEvent,
+  Track,
+  type RemoteParticipant,
+  type RemoteTrack,
+} from 'livekit-client'
+import { SignalingClient } from '../signaling/SignalingClient'
+import type { WebRtcRoomEvents } from './WebRtcRoom'
+
+/** The surface App needs from a media session; WebRtcRoom satisfies it structurally. */
+export interface MediaRoom {
+  join(room: string, displayName: string): void
+  leave(room: string): void
+  replaceVideoTrack(track: MediaStreamTrack): Promise<void>
+}
+
+/**
+ * SFU media session backed by LiveKit. Replaces the full-mesh transport when the
+ * backend advertises SFU mode: each participant uploads once to the SFU, which
+ * fans out — upload cost stops scaling with room size.
+ *
+ * Only media moves here. Room membership, names, chat, reactions and media-state
+ * flags keep flowing over the signaling WebSocket exactly as in mesh mode, so the
+ * rest of the app is transport-agnostic. LiveKit participant identity is the same
+ * `selfId` used on the signaling plane, which lets remote tracks map back onto the
+ * existing peer-keyed UI state.
+ */
+export class SfuRoom implements MediaRoom {
+  private readonly room = new Room()
+  /** One synthetic MediaStream per remote identity, feeding the existing VideoTile UI. */
+  private readonly remoteStreams = new Map<string, MediaStream>()
+
+  constructor(
+    private readonly signaling: SignalingClient,
+    private readonly selfId: string,
+    private readonly localStream: MediaStream,
+    private readonly events: WebRtcRoomEvents,
+    private readonly livekit: { url: string; token: string },
+  ) {}
+
+  join(roomName: string, displayName: string): void {
+    // Same signaling join as mesh mode: drives membership, names, chat, history.
+    this.signaling.on('error', (msg) => this.events.onError?.(String(msg.payload)))
+    this.signaling.send({ type: 'join', room: roomName, from: this.selfId, payload: displayName })
+
+    void this.connectMedia()
+  }
+
+  private async connectMedia(): Promise<void> {
+    try {
+      this.room
+        .on(RoomEvent.TrackSubscribed, (track, _pub, participant) =>
+          this.onTrackSubscribed(track, participant),
+        )
+        .on(RoomEvent.TrackUnsubscribed, (track, _pub, participant) => {
+          this.remoteStreams.get(participant.identity)?.removeTrack(track.mediaStreamTrack)
+        })
+        .on(RoomEvent.ParticipantDisconnected, (participant) => {
+          this.remoteStreams.delete(participant.identity)
+          this.events.onPeerLeft(participant.identity)
+        })
+
+      await this.room.connect(this.livekit.url, this.livekit.token)
+
+      const audio = this.localStream.getAudioTracks()[0]
+      const video = this.localStream.getVideoTracks()[0]
+      if (audio) await this.room.localParticipant.publishTrack(audio, { source: Track.Source.Microphone })
+      if (video) await this.room.localParticipant.publishTrack(video, { source: Track.Source.Camera })
+    } catch (e) {
+      this.events.onError?.(`SFU 連線失敗:${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  private onTrackSubscribed(track: RemoteTrack, participant: RemoteParticipant): void {
+    let stream = this.remoteStreams.get(participant.identity)
+    if (!stream) {
+      stream = new MediaStream()
+      this.remoteStreams.set(participant.identity, stream)
+    }
+    stream.addTrack(track.mediaStreamTrack)
+    this.events.onRemoteStream(participant.identity, stream)
+  }
+
+  /** Camera ↔ screen share swap: republish through the existing camera publication. */
+  async replaceVideoTrack(track: MediaStreamTrack): Promise<void> {
+    const publication = this.room.localParticipant.getTrackPublication(Track.Source.Camera)
+    const localTrack = publication?.videoTrack
+    if (localTrack) {
+      await localTrack.replaceTrack(track, { userProvidedTrack: true })
+    } else {
+      await this.room.localParticipant.publishTrack(track, { source: Track.Source.Camera })
+    }
+  }
+
+  leave(roomName: string): void {
+    this.signaling.send({ type: 'leave', room: roomName, from: this.selfId })
+    void this.room.disconnect()
+    this.remoteStreams.clear()
+  }
+}
+
+/** Media-plane bootstrap served by the backend. */
+export interface MediaConfig {
+  mode: 'sfu' | 'mesh'
+  livekitUrl: string
+}
+
+const authHeaders = (token?: string | null): HeadersInit =>
+  token ? { Authorization: `Bearer ${token}` } : {}
+
+/** Asks the backend which media transport to use; absent/legacy backends mean mesh. */
+export async function fetchMediaConfig(token?: string | null): Promise<MediaConfig> {
+  try {
+    const res = await fetch('/api/media/config', { headers: authHeaders(token) })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return (await res.json()) as MediaConfig
+  } catch {
+    return { mode: 'mesh', livekitUrl: '' }
+  }
+}
+
+/** Fetches a room-scoped LiveKit access token from the backend. */
+export async function fetchMediaToken(
+  room: string,
+  identity: string,
+  name: string,
+  token?: string | null,
+): Promise<string> {
+  const params = new URLSearchParams({ room, identity, name })
+  const res = await fetch(`/api/media/token?${params}`, { headers: authHeaders(token) })
+  if (!res.ok) throw new Error(`無法取得 SFU token(HTTP ${res.status})`)
+  return ((await res.json()) as { token: string }).token
+}
+
+/** Resolves the SFU URL: path-style values (behind the nginx proxy) resolve against the page origin. */
+export function resolveLivekitUrl(configured: string): string {
+  if (configured.startsWith('/')) {
+    const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    return `${scheme}://${window.location.host}${configured}`
+  }
+  return configured
+}

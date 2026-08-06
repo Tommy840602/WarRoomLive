@@ -1,6 +1,13 @@
 import { useCallback, useRef, useState } from 'react'
 import { SignalingClient, defaultSignalingUrl } from './signaling/SignalingClient'
 import { WebRtcRoom } from './webrtc/WebRtcRoom'
+import {
+  SfuRoom,
+  fetchMediaConfig,
+  fetchMediaToken,
+  resolveLivekitUrl,
+  type MediaRoom,
+} from './webrtc/SfuRoom'
 import { VideoTile } from './components/VideoTile'
 import { ChatPanel } from './components/ChatPanel'
 import { CollabNotes } from './components/CollabNotes'
@@ -44,9 +51,10 @@ export default function App() {
   const [handRaised, setHandRaised] = useState(false)
   const [raisedHands, setRaisedHands] = useState<Set<string>>(new Set())
   const [reactions, setReactions] = useState<FloatingReaction[]>([])
+  const [mediaMode, setMediaMode] = useState<'mesh' | 'sfu'>('mesh')
 
   const clientRef = useRef<SignalingClient | null>(null)
-  const roomRef = useRef<WebRtcRoom | null>(null)
+  const roomRef = useRef<MediaRoom | null>(null)
   const selfIdRef = useRef<string>(crypto.randomUUID())
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const screenStreamRef = useRef<MediaStream | null>(null)
@@ -203,20 +211,36 @@ export default function App() {
         ]),
       )
 
-      const webRtcRoom = new WebRtcRoom(client, selfIdRef.current, stream, {
-        onRemoteStream: (peerId, remote) =>
+      const mediaEvents = {
+        onRemoteStream: (peerId: string, remote: MediaStream) =>
           setRemoteStreams((prev) => new Map(prev).set(peerId, remote)),
-        onPeerLeft: (peerId) =>
+        onPeerLeft: (peerId: string) =>
           setRemoteStreams((prev) => {
             const next = new Map(prev)
             next.delete(peerId)
             return next
           }),
-        onError: (reason) => setError(reason),
-      })
-      roomRef.current = webRtcRoom
+        onError: (reason: string) => setError(reason),
+      }
+
       const displayName = name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`
-      webRtcRoom.join(room, displayName)
+
+      // The backend decides the media transport: SFU (LiveKit) when configured,
+      // else the built-in full mesh. Signaling is identical in both modes.
+      const media = await fetchMediaConfig(token)
+      setMediaMode(media.mode)
+      let mediaRoom: MediaRoom
+      if (media.mode === 'sfu') {
+        const lkToken = await fetchMediaToken(room, selfIdRef.current, displayName, token)
+        mediaRoom = new SfuRoom(client, selfIdRef.current, stream, mediaEvents, {
+          url: resolveLivekitUrl(media.livekitUrl),
+          token: lkToken,
+        })
+      } else {
+        mediaRoom = new WebRtcRoom(client, selfIdRef.current, stream, mediaEvents)
+      }
+      roomRef.current = mediaRoom
+      mediaRoom.join(room, displayName)
       setStatus('in-room')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -362,7 +386,7 @@ export default function App() {
 
       {error && <p className="app__error">⚠️ {error}</p>}
 
-      {status === 'in-room' && members.length >= ROOM_WARN_THRESHOLD && (
+      {status === 'in-room' && mediaMode === 'mesh' && members.length >= ROOM_WARN_THRESHOLD && (
         <p className="app__warning">
           ⚠️ 房間目前 {members.length} 人。此版本採 WebRTC full mesh,人數偏多時上行頻寬與畫面可能開始卡頓(上限 8 人)。
         </p>
