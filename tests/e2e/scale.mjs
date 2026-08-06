@@ -7,27 +7,46 @@
 // that dies cannot disconnect its peers, so the survivors must drop them once
 // its heartbeat expires.
 import {
-  RUN_ID, collabClient, compose, containersOf, done, logMatches, ok, sh, signalClient, sleep, until,
+  RUN_ID, addressesOf, collabClient, compose, containersOf, done, isRunning, logMatches, ok, sh,
+  signalClient, sleep, until,
 } from './lib.mjs'
 
 const COMPOSE = compose('scale')
 
 // --- 1. CRDT convergence across collab replicas.
+//
+// Clients are PINNED to a replica each rather than sent through the proxy:
+// round-robin can put every client on the same instance, and a suite that
+// happens to do so passes while cross-instance sync is completely broken.
 {
   const DOC = 'warroom:scale-' + RUN_ID
-  // Several clients so nginx's request-time DNS spreads them over both replicas.
-  const clients = await Promise.all([1, 2, 3, 4].map(() => collabClient(DOC)))
-  await until('all synced', () => clients.every((c) => c.provider.isSynced), 20000)
+  const replicas = addressesOf('collab', COMPOSE)
+  ok(replicas.length >= 2, `the scale overlay is up (${replicas.length} collab replicas)`)
 
-  clients[0].text.insert(0, 'scale-sync ')
-  await until('replicated to all', () =>
-    clients.every((c) => c.text.toString().includes('scale-sync')), 20000)
-  clients[3].text.insert(clients[3].text.length, 'from-last')
-  await until('replicated back', () =>
-    clients.every((c) => c.text.toString().includes('from-last')), 20000)
+  const [a, b] = await Promise.all(
+    replicas.slice(0, 2).map((r) => collabClient(DOC, { url: `ws://${r.ip}:1234` })))
+  await until('both replicas synced', () => a.provider.isSynced && b.provider.isSynced, 20000)
 
-  ok(true, 'CRDT edits converge across clients spread over the collab replicas')
-  clients.forEach((c) => c.destroy())
+  a.text.insert(0, 'from-replica-1 ')
+  await until('edit crossed 1 → 2', () => b.text.toString().includes('from-replica-1'), 20000)
+  b.text.insert(b.text.length, 'from-replica-2')
+  await until('edit crossed 2 → 1', () => a.text.toString().includes('from-replica-2'), 20000)
+  ok(true, 'document edits cross between clients pinned to different replicas')
+
+  // Awareness travels the same Redis channel as updates but through a separate
+  // code path; a replica that cannot decode a peer's awareness frame dies on it.
+  a.provider.setAwarenessField('user', { name: 'Alice', color: '#f00' })
+  b.provider.setAwarenessField('user', { name: 'Bob', color: '#00f' })
+  await until('awareness crossed replicas', () =>
+    [...b.provider.awareness.getStates().values()].some((s) => s.user?.name === 'Alice')
+    && [...a.provider.awareness.getStates().values()].some((s) => s.user?.name === 'Bob'), 20000)
+  ok(true, 'awareness (cursor presence) crosses replicas')
+
+  a.destroy()
+  b.destroy()
+  await sleep(1000)
+  ok(replicas.every((r) => isRunning(r.name)),
+    'every collab replica is still running after cross-replica traffic')
 }
 
 // --- 2. Ghost pruning after a node dies without closing its sockets.

@@ -51,6 +51,11 @@ if [ -z "$SUITES" ]; then
 fi
 
 RUN_ID=${RUN_ID:-$(date +%s)}
+# Suites talk to localhost and, when pinned to a replica, to container IPs —
+# never through an outbound proxy.
+NO_PROXY=${NO_PROXY:-'*'}
+no_proxy=$NO_PROXY
+export NO_PROXY no_proxy
 FAILED=""
 for suite in $SUITES; do
   echo ""

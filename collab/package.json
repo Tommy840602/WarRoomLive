@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@hocuspocus/extension-database": "^2.15.2",
-    "@hocuspocus/extension-redis": "^4.5.0",
+    "@hocuspocus/extension-redis": "^2.15.3",
     "@hocuspocus/server": "^2.15.2",
     "ioredis": "^6.0.0",
     "jose": "^6.2.8",

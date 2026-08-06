@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `backend/` — Spring Boot 3.3 signaling server (Java 21, Maven).
 - `frontend/` — React 18 + TypeScript, built with Vite.
-- `collab/` — Node 20 Hocuspocus (Yjs) document-sync service on `:1234`; persists an update log + compacted snapshots to Postgres when reachable, else memory-only. Enforces message-size/doc-size/rate limits; requires JWTs when `OIDC_ISSUER` is set.
+- `collab/` — Node 20 Hocuspocus (Yjs) document-sync service on `:1234`; persists an update log + compacted snapshots to Postgres when reachable, else memory-only. Enforces message-size/doc-size/rate limits; requires JWTs when `OIDC_ISSUER` is set. **Keep `@hocuspocus/server`, `extension-database` and `extension-redis` on one major version.** A newer `extension-redis` installs its own nested `@hocuspocus/server`, and the two versions then share document objects across the Redis channel: the nested code calls a callback the outer version's documents do not have, and the replica dies of an uncaught TypeError the first time awareness crosses instances. `tests/e2e/run.sh scale` covers this.
 - `devidp/` — DEV-ONLY OIDC provider (fixed users alice/bob, in-memory key) used by the `docker-compose.oidc.yml` overlay; production swaps it for Keycloak/Entra via the `OIDC_*` env vars. Never deploy it publicly.
 - `docs/architecture/roadmap.md` — phased plan mapping the target production tech stack onto this codebase; consult it before starting a new architectural increment.
 - `README.md` — architecture diagram and run instructions (keep in sync with this file).

@@ -135,14 +135,15 @@ export function signalClient(id, name = id, { token } = {}) {
  * A Yjs client on the shared document plane. Imported lazily so suites that
  * only touch signaling do not need the Yjs dependencies loaded.
  */
-export async function collabClient(docName, { token, field = 'e2e' } = {}) {
+export async function collabClient(docName, { token, field = 'e2e', url } = {}) {
   const [Y, { HocuspocusProvider }] = await Promise.all([
     import('yjs'),
     import('@hocuspocus/provider'),
   ])
   const doc = new Y.Doc()
   const provider = new HocuspocusProvider({
-    url: `${WS_ORIGIN}/ws/doc`,
+    // `url` pins the client to one replica, bypassing the proxy's round-robin.
+    url: url ?? `${WS_ORIGIN}/ws/doc`,
     name: docName,
     document: doc,
     ...(token ? { token } : {}),
@@ -150,3 +151,15 @@ export async function collabClient(docName, { token, field = 'e2e' } = {}) {
   })
   return { doc, provider, text: doc.getText(field), destroy: () => provider.destroy() }
 }
+
+/** Address of each container backing a service, for replica-pinned clients. */
+export function addressesOf(service, cmd = compose()) {
+  return containersOf(service, cmd).map((name) => ({
+    name,
+    ip: sh(`docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${name}`),
+  }))
+}
+
+/** True while the container is running — a crashed replica is the failure mode. */
+export const isRunning = (container) =>
+  sh(`docker inspect -f '{{.State.Status}}' ${container} || true`) === 'running'
