@@ -32,6 +32,7 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
 - **聊天記錄持久化**:聊天訊息存進倉儲,加入房間時以 `history` 訊息重播最近記錄(重整或晚到都看得到)。倉儲有兩種實作,以 Spring profile 切換:
   - 預設(無 profile):記憶體環形緩衝(每房最近 `warroomlive.chat.history-limit` 則,預設 100),零依賴,伺服器重啟後消失。
   - `postgres` profile:Spring Data JPA + PostgreSQL,跨重啟耐久。啟用:`SPRING_PROFILES_ACTIVE=postgres`,並提供 `DB_URL` / `DB_USER` / `DB_PASSWORD`。Schema 由 **Flyway** 管理(`backend/src/main/resources/db/migration/`,含 collab 服務的表),Hibernate 只做 `validate`;既有資料庫以 baseline 無縫接軌。
+- **共享白板**:與筆記同面板的「白板」分頁——畫筆(五色)、可拖動/雙擊編輯的便利貼、自己操作的復原(Yjs `UndoManager`,只回退本人變更)。畫完的筆畫與便利貼是 durable 狀態(落在同一份房間 Yjs 文件的 `board:*` 型別,沿用 collab 服務的持久化/限流/快照事件);**進行中的筆畫與游標走 ephemeral awareness**(~25Hz 節流、不落地)——藍圖 durable/ephemeral 分離的白板版。前端以 Konva(react-konva)渲染。
 - **共同筆記(CRDT 協作編輯)**:房間內所有人同時編輯同一份筆記,採 Yjs CRDT 無衝突合併——前端 TipTap 編輯器 + `y-prosemirror`,經 `/ws/doc` 連到獨立的 **collab 服務**(Node + Hocuspocus)。游標與名稱走 ephemeral awareness(不落地,前端節流至 ~25 Hz);文件內容持久化到 PostgreSQL:每筆增量 update 先進 `collab_update` 日誌(崩潰也不掉字),debounce 後合併成 `collab_document` 快照並清掉已涵蓋的日誌(compaction)。單筆訊息(512 KB)、文件大小(5 MB)、每連線訊息速率(120/s)皆有上限,超限只斷開該連線。每個房間對應一份文件(`warroom:<房名>`)。
 
 ## Docker 部署(完整 stack)
@@ -62,6 +63,16 @@ docker compose -f docker-compose.yml -f docker-compose.sfu.yml up --build
 - 後端 `/api/media/token` 以 API secret 簽發**限單一房間**的 LiveKit access token(HS256 video grant);secret 不出伺服器。啟用 `oidc` profile 時此端點自動要求登入。
 - LiveKit 信令 WebSocket 由 nginx 代理在同 origin 的 `/livekit`;媒體(SRTP)直接走 SFU 的 RTC 埠(7881/tcp、7882/udp)。瀏覽器無法直達容器網路的環境(macOS/Windows 或對外部署)請在 `infrastructure/livekit/livekit.yaml` 設 `rtc.node_ip`。
 - 房間人數上限(信令層)在此模式放寬到 50;聊天、筆記、表情、舉手等仍走原本的 signaling WebSocket,完全不受媒體傳輸方式影響。
+
+## 會議錄影(選用疊加層,疊在 SFU 之上)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sfu.yml -f docker-compose.recording.yml up --build
+```
+
+- 房間內(SFU 模式)出現「錄影」按鈕:後端呼叫 **LiveKit Egress** 的 twirp API 啟動 room-composite 錄影(headless Chrome 合成畫面),MP4 直接上傳 **MinIO**(S3 API,bucket `recordings`);LiveKit secret 與儲存憑證都不出後端。離開房間時自動停止。
+- **完成通知走 webhook**:LiveKit 以「body 雜湊 JWT」簽名回呼 `/api/livekit/webhook`(後端驗簽),搭配 events 疊加層時轉成 `meeting.recording.completed` 事件進骨幹。
+- **會議領域**(`postgres` profile 自動啟用):第一人加入開啟 `meetings` 列、最後一人離開關閉(含時長與人數峰值);`meeting.started` / `meeting.ended` 與列同交易寫入 outbox。`Backplane.tryRegister/unregister` 回傳叢集人數,多節點下「第一人/最後一人」判定也精準。房間額滿的拒絕會發 `participant.rejected` 事件(權限類稽核)。
 
 ## OIDC 認證(選用疊加層)
 

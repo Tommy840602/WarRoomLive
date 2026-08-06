@@ -133,8 +133,10 @@ async function index(envelope) {
   }
 }
 
-const kafka = new Kafka({ clientId: 'warroom-indexer', brokers, logLevel: logLevel.WARN })
-const consumer = kafka.consumer({ groupId })
+// metadataMaxAge kept short so added partitions are noticed and rebalanced onto
+// within ~30s instead of kafkajs's 5-minute default.
+const kafka = new Kafka({ clientId: 'warroom-indexer', brokers, logLevel: logLevel.WARN, metadataMaxAge: 30000 })
+const consumer = kafka.consumer({ groupId, metadataMaxAge: 30000 })
 await consumer.connect()
 await consumer.subscribe({ topic, fromBeginning: true })
 await consumer.run({

@@ -10,7 +10,7 @@ import {
 } from './webrtc/SfuRoom'
 import { VideoTile } from './components/VideoTile'
 import { ChatPanel } from './components/ChatPanel'
-import { CollabNotes } from './components/CollabNotes'
+import { CollabPanel } from './components/CollabPanel'
 import { MemberList, type Member } from './components/MemberList'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
@@ -52,6 +52,7 @@ export default function App() {
   const [raisedHands, setRaisedHands] = useState<Set<string>>(new Set())
   const [reactions, setReactions] = useState<FloatingReaction[]>([])
   const [mediaMode, setMediaMode] = useState<'mesh' | 'sfu'>('mesh')
+  const [recordingId, setRecordingId] = useState<string | null>(null)
 
   const clientRef = useRef<SignalingClient | null>(null)
   const roomRef = useRef<MediaRoom | null>(null)
@@ -61,6 +62,7 @@ export default function App() {
   // Mirror the flags so listeners registered once can read the latest values.
   const mediaStateRef = useRef<MediaState>({ audio: true, video: true })
   const handRaisedRef = useRef(false)
+  const recordingIdRef = useRef<string | null>(null)
 
   /** Resolves a peer id to its display name, falling back to a short id. */
   const nameOf = (peerId: string) => names.get(peerId) ?? peerId.slice(0, 8)
@@ -95,6 +97,14 @@ export default function App() {
 
   /** Tears down the session and resets all room state (does not notify the server). */
   const teardown = useCallback(() => {
+    // Leaving with a recording running: stop it best-effort.
+    if (recordingIdRef.current) {
+      void fetch(`/api/media/recordings/stop?egressId=${encodeURIComponent(recordingIdRef.current)}`, {
+        method: 'POST',
+      })
+      recordingIdRef.current = null
+      setRecordingId(null)
+    }
     clientRef.current?.close()
     cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
     screenStreamRef.current?.getTracks().forEach((track) => track.stop())
@@ -330,6 +340,32 @@ export default function App() {
     }
   }, [stopScreenShare])
 
+  /** Starts/stops a server-side LiveKit Egress recording (SFU mode only). */
+  const toggleRecording = useCallback(async () => {
+    const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {}
+    try {
+      if (recordingId) {
+        await fetch(`/api/media/recordings/stop?egressId=${encodeURIComponent(recordingId)}`, {
+          method: 'POST',
+          headers,
+        })
+        recordingIdRef.current = null
+        setRecordingId(null)
+        return
+      }
+      const res = await fetch(`/api/media/recordings/${encodeURIComponent(room)}/start`, {
+        method: 'POST',
+        headers,
+      })
+      if (!res.ok) throw new Error(`錄影啟動失敗(HTTP ${res.status})`)
+      const { egressId } = (await res.json()) as { egressId: string }
+      recordingIdRef.current = egressId
+      setRecordingId(egressId)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }, [recordingId, room, token])
+
   const sendChat = useCallback(
     (text: string) => {
       clientRef.current?.send({ type: 'chat', room, from: selfIdRef.current, payload: text })
@@ -381,6 +417,11 @@ export default function App() {
             >
               {screenSharing ? '停止分享' : '分享螢幕'}
             </button>
+            {mediaMode === 'sfu' && (
+              <button className="btn-secondary" onClick={() => void toggleRecording()}>
+                {recordingId ? '🔴 停止錄影' : '錄影'}
+              </button>
+            )}
             <button onClick={leave}>離開房間</button>
           </>
         ) : (
@@ -441,7 +482,7 @@ export default function App() {
       </section>
 
       {status === 'in-room' && (
-        <CollabNotes
+        <CollabPanel
           room={room}
           userName={name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`}
           token={token}

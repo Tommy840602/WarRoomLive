@@ -119,20 +119,30 @@ public class RedisBackplane implements Backplane {
 
     /**
      * KEYS[1]=room hash, KEYS[2]=rooms set; ARGV: peerId, entryJson, max, room.
-     * Returns 1 when registered, 0 when the room is full.
+     * Returns the member count after registering, or -1 when the room is full.
      */
     private static final DefaultRedisScript<Long> TRY_REGISTER = new DefaultRedisScript<>("""
             if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 0
                and redis.call('HLEN', KEYS[1]) >= tonumber(ARGV[3]) then
-              return 0
+              return -1
             end
             redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
             redis.call('SADD', KEYS[2], ARGV[4])
-            return 1
+            return redis.call('HLEN', KEYS[1])
+            """, Long.class);
+
+    /** KEYS[1]=room hash, KEYS[2]=rooms set; ARGV: peerId, room. Returns members left. */
+    private static final DefaultRedisScript<Long> UNREGISTER = new DefaultRedisScript<>("""
+            redis.call('HDEL', KEYS[1], ARGV[1])
+            local remaining = redis.call('HLEN', KEYS[1])
+            if remaining == 0 then
+              redis.call('SREM', KEYS[2], ARGV[2])
+            end
+            return remaining
             """, Long.class);
 
     @Override
-    public boolean tryRegister(String room, String peerId, String name, int maxRoomSize) {
+    public int tryRegister(String room, String peerId, String name, int maxRoomSize) {
         try {
             Long result = redis.execute(TRY_REGISTER,
                     List.of(roomKey(room), ROOMS_KEY),
@@ -140,18 +150,16 @@ public class RedisBackplane implements Backplane {
                     mapper.writeValueAsString(new MemberEntry(name, nodeId)),
                     String.valueOf(maxRoomSize),
                     room);
-            return Long.valueOf(1L).equals(result);
+            return result == null ? REGISTER_REJECTED : result.intValue();
         } catch (Exception e) {
             throw new IllegalStateException("failed to register peer in Redis", e);
         }
     }
 
     @Override
-    public void unregister(String room, String peerId) {
-        redis.opsForHash().delete(roomKey(room), peerId);
-        if (redis.opsForHash().size(roomKey(room)) == 0) {
-            redis.opsForSet().remove(ROOMS_KEY, room);
-        }
+    public int unregister(String room, String peerId) {
+        Long remaining = redis.execute(UNREGISTER, List.of(roomKey(room), ROOMS_KEY), peerId, room);
+        return remaining == null ? 0 : remaining.intValue();
     }
 
     @Override

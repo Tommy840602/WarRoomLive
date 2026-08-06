@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Single-node backplane. Owns the membership directory (mirroring what
@@ -37,26 +37,29 @@ public class LocalBackplane implements Backplane {
     }
 
     @Override
-    public boolean tryRegister(String room, String peerId, String name, int maxRoomSize) {
-        AtomicBoolean accepted = new AtomicBoolean(false);
+    public int tryRegister(String room, String peerId, String name, int maxRoomSize) {
+        AtomicInteger sizeAfter = new AtomicInteger(REGISTER_REJECTED);
         directory.compute(room, (r, members) -> {
             Map<String, String> next = members != null ? members : new ConcurrentHashMap<>();
             if (next.size() >= maxRoomSize && !next.containsKey(peerId)) {
                 return members; // full; leave untouched (null stays null)
             }
             next.put(peerId, name);
-            accepted.set(true);
+            sizeAfter.set(next.size());
             return next;
         });
-        return accepted.get();
+        return sizeAfter.get();
     }
 
     @Override
-    public void unregister(String room, String peerId) {
+    public int unregister(String room, String peerId) {
+        AtomicInteger remaining = new AtomicInteger(0);
         directory.computeIfPresent(room, (r, members) -> {
             members.remove(peerId);
+            remaining.set(members.size());
             return members.isEmpty() ? null : members;
         });
+        return remaining.get();
     }
 
     @Override

@@ -30,6 +30,9 @@ public interface Backplane {
     /** Peers currently in the room cluster-wide (stale entries pruned best-effort). */
     List<PeerInfo> peersIn(String room);
 
+    /** Returned by {@link #tryRegister} when the room is at capacity. */
+    int REGISTER_REJECTED = -1;
+
     /**
      * Atomically registers a peer (hosted on this node) in the cluster directory,
      * unless the room already holds {@code maxRoomSize} members. Re-registering an
@@ -37,12 +40,17 @@ public interface Backplane {
      * here so it is race-free per implementation (per-room compute locally, a Lua
      * script on Redis).
      *
-     * @return {@code true} if the peer is now a member, {@code false} if the room is full
+     * @return the room's member count after registering (1 ⇒ this join opened the
+     *         room), or {@link #REGISTER_REJECTED} if the room is full
      */
-    boolean tryRegister(String room, String peerId, String name, int maxRoomSize);
+    int tryRegister(String room, String peerId, String name, int maxRoomSize);
 
-    /** Removes a peer from the cluster directory. */
-    void unregister(String room, String peerId);
+    /**
+     * Removes a peer from the cluster directory.
+     *
+     * @return the members remaining in the room (0 ⇒ this leave closed the room)
+     */
+    int unregister(String room, String peerId);
 
     /** The node hosting the peer, if known ({@code self} on the local impl). */
     Optional<String> nodeOf(String room, String peerId);

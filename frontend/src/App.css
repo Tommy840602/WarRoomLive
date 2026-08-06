@@ -329,14 +329,101 @@
   overflow: hidden;
 }
 
+.notes__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #2a2f38;
+  padding-right: 0.6rem;
+}
+
 .notes__title {
   margin: 0;
   padding: 0.6rem 0.9rem;
   font-size: 0.95rem;
-  border-bottom: 1px solid #2a2f38;
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+.notes__tabs {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.notes__tab {
+  padding: 0.3rem 0.8rem;
+  border: 1px solid #2a2f38;
+  border-radius: 6px;
+  background: #171a21;
+  color: #9aa0a6;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.notes__tab--active {
+  background: #1e3a5f;
+  color: #e6e8eb;
+  border-color: #3b82f6;
+}
+
+.board {
+  position: relative;
+}
+
+.board__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.9rem;
+  border-bottom: 1px solid #2a2f38;
+}
+
+.board__pen {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+
+.board__pen--active {
+  border-color: #3b82f6;
+}
+
+.board__tool {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #2a2f38;
+  border-radius: 6px;
+  background: #171a21;
+  color: #e6e8eb;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.board__hint {
+  margin-left: auto;
+  color: #6b7280;
+  font-size: 0.75rem;
+}
+
+.board__stage {
+  cursor: crosshair;
+  background: #0d1017;
+}
+
+.board__edit {
+  position: absolute;
+  width: 150px;
+  height: 80px;
+  padding: 0.4rem;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  background: #fff8dc;
+  color: #1a1a1a;
+  font-size: 14px;
+  resize: none;
+  z-index: 5;
 }
 
 .notes__dot {

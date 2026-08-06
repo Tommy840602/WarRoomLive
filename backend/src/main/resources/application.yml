@@ -39,6 +39,13 @@ warroomlive:
     turn-urls: ${TURN_URLS:}
     turn-username: ${TURN_USERNAME:}
     turn-password: ${TURN_PASSWORD:}
+    # Recording (docker-compose.recording.yml): where THIS server reaches LiveKit's
+    # twirp API, and the S3 output egress uploads finished MP4s to.
+    livekit-internal-url: ${LIVEKIT_INTERNAL_URL:}
+    egress-s3-endpoint: ${EGRESS_S3_ENDPOINT:}
+    egress-s3-bucket: ${EGRESS_S3_BUCKET:}
+    egress-s3-access-key: ${EGRESS_S3_ACCESS_KEY:}
+    egress-s3-secret-key: ${EGRESS_S3_SECRET_KEY:}
 
 # Metrics/health for scraping. nginx does not proxy /actuator, so these stay
 # internal to the compose network (the observability overlay's Prometheus).
