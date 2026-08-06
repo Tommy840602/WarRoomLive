@@ -1,0 +1,11 @@
+{
+  "name": "warroomlive-dr-drill",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@hocuspocus/provider": "^2.15.3",
+    "pg": "^8.13.1",
+    "yjs": "^13.6.20"
+  }
+}
