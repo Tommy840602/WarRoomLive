@@ -10,7 +10,7 @@ import {
 } from './webrtc/SfuRoom'
 import { VideoTile } from './components/VideoTile'
 import { ChatPanel } from './components/ChatPanel'
-import { CollabNotes } from './components/CollabNotes'
+import { CollabPanel } from './components/CollabPanel'
 import { MemberList, type Member } from './components/MemberList'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
@@ -441,7 +441,7 @@ export default function App() {
       </section>
 
       {status === 'in-room' && (
-        <CollabNotes
+        <CollabPanel
           room={room}
           userName={name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`}
           token={token}

@@ -10,7 +10,7 @@
 | 業務事件 | Spring WebSocket(STOMP)+ Redis/Kafka backplane | 自訂 JSON envelope(`SignalMessage`)單節點 | 單節點夠用;水平擴展需 backplane |
 | 共同編輯 | TipTap/ProseMirror + Yjs + Hocuspocus + Postgres | ✅ 同組合:`collab/` 服務,快照落 `collab_document` | 尚未做 update log / snapshot compaction |
 | 持久化 | PostgreSQL 為 source of truth | 聊天(`chat_message`)與筆記快照(`collab_document`)入 Postgres | 無 Flyway、無 outbox |
-| 前端 | Vue 3 生態系 | React 18(既有投資,不重寫) | 刻意偏離:框架差異不影響架構分層 |
+| 前端 | Vue 3 生態系 + Konva 白板 | React 18(既有投資,不重寫)+ Konva 白板 ✅ | 刻意偏離框架;白板已落地(筆畫/便利貼 durable、游標/進行中筆畫 ephemeral) |
 
 ## 演進順序(建議)
 

@@ -32,6 +32,7 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
 - **聊天記錄持久化**:聊天訊息存進倉儲,加入房間時以 `history` 訊息重播最近記錄(重整或晚到都看得到)。倉儲有兩種實作,以 Spring profile 切換:
   - 預設(無 profile):記憶體環形緩衝(每房最近 `warroomlive.chat.history-limit` 則,預設 100),零依賴,伺服器重啟後消失。
   - `postgres` profile:Spring Data JPA + PostgreSQL,跨重啟耐久。啟用:`SPRING_PROFILES_ACTIVE=postgres`,並提供 `DB_URL` / `DB_USER` / `DB_PASSWORD`。Schema 由 **Flyway** 管理(`backend/src/main/resources/db/migration/`,含 collab 服務的表),Hibernate 只做 `validate`;既有資料庫以 baseline 無縫接軌。
+- **共享白板**:與筆記同面板的「白板」分頁——畫筆(五色)、可拖動/雙擊編輯的便利貼、自己操作的復原(Yjs `UndoManager`,只回退本人變更)。畫完的筆畫與便利貼是 durable 狀態(落在同一份房間 Yjs 文件的 `board:*` 型別,沿用 collab 服務的持久化/限流/快照事件);**進行中的筆畫與游標走 ephemeral awareness**(~25Hz 節流、不落地)——藍圖 durable/ephemeral 分離的白板版。前端以 Konva(react-konva)渲染。
 - **共同筆記(CRDT 協作編輯)**:房間內所有人同時編輯同一份筆記,採 Yjs CRDT 無衝突合併——前端 TipTap 編輯器 + `y-prosemirror`,經 `/ws/doc` 連到獨立的 **collab 服務**(Node + Hocuspocus)。游標與名稱走 ephemeral awareness(不落地,前端節流至 ~25 Hz);文件內容持久化到 PostgreSQL:每筆增量 update 先進 `collab_update` 日誌(崩潰也不掉字),debounce 後合併成 `collab_document` 快照並清掉已涵蓋的日誌(compaction)。單筆訊息(512 KB)、文件大小(5 MB)、每連線訊息速率(120/s)皆有上限,超限只斷開該連線。每個房間對應一份文件(`warroom:<房名>`)。
 
 ## Docker 部署(完整 stack)
