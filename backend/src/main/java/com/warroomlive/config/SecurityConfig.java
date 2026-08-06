@@ -46,7 +46,9 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // /actuator is not proxied by nginx, so it stays reachable only
                         // from inside the compose network (Prometheus scraper).
-                        .requestMatchers("/api/health", "/api/auth/config", "/actuator/**").permitAll()
+                        // The LiveKit webhook authenticates itself (body-hash JWT
+                        // signed with the API secret, verified in its controller).
+                        .requestMatchers("/api/health", "/api/auth/config", "/api/livekit/webhook", "/actuator/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(rs -> rs
                         .bearerTokenResolver(resolver)

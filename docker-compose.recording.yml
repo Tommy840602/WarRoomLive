@@ -1,0 +1,59 @@
+# Opt-in meeting recording on top of the SFU overlay:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sfu.yml \
+#     -f docker-compose.recording.yml up --build
+#
+# LiveKit Egress renders a room-composite view in headless Chrome and uploads
+# MP4s to MinIO (S3 API). The backend starts/stops egress via LiveKit's twirp
+# API (POST /api/media/recordings/...) and receives LiveKit webhooks at
+# /api/livekit/webhook — with the events overlay active, egress completion
+# becomes a meeting.recording.completed event on the backbone.
+# Dev credentials throughout — rotate before exposing anything publicly.
+services:
+  redis:
+    image: redis:7-alpine
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: warroom
+      MINIO_ROOT_PASSWORD: warroomsecret
+    volumes:
+      - recordings:/data
+
+  # One-shot bucket bootstrap.
+  minio-init:
+    image: minio/mc:latest
+    entrypoint: ["/bin/sh", "-c",
+      "until mc alias set local http://minio:9000 warroom warroomsecret; do sleep 1; done; mc mb -p local/recordings"]
+    depends_on:
+      - minio
+
+  egress:
+    image: livekit/egress:latest
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    volumes:
+      - ./infrastructure/livekit/egress.yaml:/etc/egress.yaml:ro
+    shm_size: "2gb" # headless Chrome compositing
+    depends_on:
+      - redis
+      - livekit
+
+  livekit:
+    volumes:
+      - ./infrastructure/livekit/livekit-recording.yaml:/etc/livekit.yaml:ro
+    depends_on:
+      - redis
+
+  backend:
+    environment:
+      LIVEKIT_INTERNAL_URL: http://livekit:7880
+      EGRESS_S3_ENDPOINT: http://minio:9000
+      EGRESS_S3_BUCKET: recordings
+      EGRESS_S3_ACCESS_KEY: warroom
+      EGRESS_S3_SECRET_KEY: warroomsecret
+
+volumes:
+  recordings:

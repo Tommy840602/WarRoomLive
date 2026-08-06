@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.warroomlive.chat.ChatRepository;
 import com.warroomlive.chat.StoredMessage;
 import com.warroomlive.events.OutboxRecorder;
+import com.warroomlive.meetings.MeetingTracker;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
@@ -45,6 +46,8 @@ public class SignalingHandler extends TextWebSocketHandler {
     private final ChatRepository chat;
     /** Present only under the kafka profile; membership events are skipped without it. */
     private final ObjectProvider<OutboxRecorder> outbox;
+    /** Present only under the postgres profile; meetings go untracked without it. */
+    private final ObjectProvider<MeetingTracker> meetings;
     private final int maxRoomSize;
     private final int historyLimit;
 
@@ -61,6 +64,7 @@ public class SignalingHandler extends TextWebSocketHandler {
             ObjectMapper mapper,
             ChatRepository chat,
             ObjectProvider<OutboxRecorder> outbox,
+            ObjectProvider<MeetingTracker> meetings,
             MeterRegistry metrics,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-room-size:8}") int maxRoomSize,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.history-limit:100}") int historyLimit) {
@@ -69,6 +73,7 @@ public class SignalingHandler extends TextWebSocketHandler {
         this.mapper = mapper;
         this.chat = chat;
         this.outbox = outbox;
+        this.meetings = meetings;
         this.metrics = metrics;
         this.maxRoomSize = maxRoomSize;
         this.historyLimit = historyLimit;
@@ -167,15 +172,21 @@ public class SignalingHandler extends TextWebSocketHandler {
         // existing member always pass.
         List<PeerInfo> clusterPeers = backplane.peersIn(msg.room());
         String name = displayName(msg);
-        if (!backplane.tryRegister(msg.room(), msg.from(), name, maxRoomSize)) {
+        int memberCount = backplane.tryRegister(msg.room(), msg.from(), name, maxRoomSize);
+        if (memberCount == Backplane.REGISTER_REJECTED) {
             log.info("Rejected {} from full room {} (cap {})", msg.from(), msg.room(), maxRoomSize);
             send(session, new SignalMessage(
                     SignalMessage.TYPE_ROOM_FULL, msg.room(), null, msg.from(),
                     mapper.valueToTree(maxRoomSize)));
+            // Access-control decisions are audit-relevant: emit the rejection.
+            outbox.ifAvailable(recorder -> recorder.record(
+                    "participant.rejected", "room", msg.room(),
+                    Map.of("peerId", msg.from(), "reason", "room_full", "capacity", maxRoomSize)));
             return;
         }
 
         rooms.join(msg.room(), msg.from(), name, session);
+        meetings.ifAvailable(tracker -> tracker.participantJoined(msg.room(), memberCount));
         List<PeerInfo> existingPeers = clusterPeers.stream()
                 .filter(info -> !info.id().equals(msg.from()))
                 .toList();
@@ -260,13 +271,14 @@ public class SignalingHandler extends TextWebSocketHandler {
 
     private void broadcastPeerLeft(RoomManager.PeerLocation location) {
         log.info("Peer {} left room {}", location.peerId(), location.room());
-        backplane.unregister(location.room(), location.peerId());
+        int remaining = backplane.unregister(location.room(), location.peerId());
         SignalMessage left = new SignalMessage(
                 SignalMessage.TYPE_PEER_LEFT, location.room(), location.peerId(), null, null);
         rooms.othersIn(location.room(), location.peerId()).forEach(other -> send(other, left));
         backplane.publishToRoom(location.room(), location.peerId(), left);
         outbox.ifAvailable(recorder -> recorder.record(
                 "participant.left", "room", location.room(), Map.of("peerId", location.peerId())));
+        meetings.ifAvailable(tracker -> tracker.participantLeft(location.room(), remaining));
     }
 
     private void sendError(WebSocketSession session, String room, String reason) {
