@@ -1,26 +1,28 @@
 package com.warroomlive.config;
 
-import com.warroomlive.signaling.RoomManager;
+import com.warroomlive.signaling.Backplane;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.binder.MeterBinder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Registers room-state gauges without coupling {@link RoomManager} to Micrometer —
- * the domain object just exposes counts, metrics stay an infrastructure concern.
+ * Registers room-state gauges without coupling the signaling domain to Micrometer —
+ * the domain objects just expose counts, metrics stay an infrastructure concern.
+ * Counts come from the backplane, so on a Redis deployment every node reports the
+ * cluster-wide view (connection counts remain per-node in SignalingHandler).
  */
 @Configuration
 public class MetricsConfig {
 
     @Bean
-    MeterBinder roomMetrics(RoomManager rooms) {
+    MeterBinder roomMetrics(Backplane backplane) {
         return registry -> {
-            Gauge.builder("warroomlive.rooms.active", rooms::roomCount)
-                    .description("Rooms with at least one connected peer")
+            Gauge.builder("warroomlive.rooms.active", backplane::roomCount)
+                    .description("Rooms with at least one connected peer (cluster-wide)")
                     .register(registry);
-            Gauge.builder("warroomlive.rooms.members", rooms::memberCount)
-                    .description("Connected peers across all rooms")
+            Gauge.builder("warroomlive.rooms.members", backplane::memberCount)
+                    .description("Connected peers across all rooms (cluster-wide)")
                     .register(registry);
         };
     }

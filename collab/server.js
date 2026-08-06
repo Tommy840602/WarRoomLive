@@ -16,6 +16,7 @@
 // other participants are unaffected.
 import { Server } from '@hocuspocus/server'
 import { Database } from '@hocuspocus/extension-database'
+import { Redis as RedisSync } from '@hocuspocus/extension-redis'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import * as Y from 'yjs'
 import pg from 'pg'
@@ -168,6 +169,19 @@ const updateLog = {
 }
 
 const extensions = [metricsEndpoint, guards, updateLog]
+
+// Multi-instance mode: with REDIS_HOST set, Hocuspocus instances sync document
+// updates and awareness through Redis, so replicas can serve the same documents
+// (see docker-compose.scale.yml). Unset in local dev → single instance, no Redis.
+if (process.env.REDIS_HOST) {
+  extensions.push(
+    new RedisSync({
+      host: process.env.REDIS_HOST,
+      port: Number(process.env.REDIS_PORT ?? 6379),
+    }),
+  )
+  console.log(`collab service: syncing across instances via Redis at ${process.env.REDIS_HOST}`)
+}
 if (pool) {
   extensions.push(
     new Database({

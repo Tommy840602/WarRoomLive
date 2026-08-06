@@ -38,6 +38,7 @@ public class SignalingHandler extends TextWebSocketHandler {
     private static final int SEND_BUFFER_LIMIT_BYTES = 512 * 1024;
 
     private final RoomManager rooms;
+    private final Backplane backplane;
     private final ObjectMapper mapper;
     private final ChatRepository chat;
     private final int maxRoomSize;
@@ -52,12 +53,14 @@ public class SignalingHandler extends TextWebSocketHandler {
 
     public SignalingHandler(
             RoomManager rooms,
+            Backplane backplane,
             ObjectMapper mapper,
             ChatRepository chat,
             MeterRegistry metrics,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-room-size:8}") int maxRoomSize,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.history-limit:100}") int historyLimit) {
         this.rooms = rooms;
+        this.backplane = backplane;
         this.mapper = mapper;
         this.chat = chat;
         this.metrics = metrics;
@@ -67,6 +70,18 @@ public class SignalingHandler extends TextWebSocketHandler {
         this.processingTimer = Timer.builder("warroomlive.signaling.message.processing")
                 .description("Time spent handling one inbound signaling message")
                 .register(metrics);
+        // Deliver backplane traffic from other nodes into this node's sessions.
+        backplane.start(new Backplane.LocalDelivery() {
+            @Override
+            public void toPeer(String room, String peerId, SignalMessage message) {
+                rooms.session(room, peerId).ifPresent(s -> send(s, message));
+            }
+
+            @Override
+            public void toRoomExcept(String room, String excludePeerId, SignalMessage message) {
+                rooms.othersIn(room, excludePeerId).forEach(s -> send(s, message));
+            }
+        });
     }
 
     @Override
@@ -127,8 +142,12 @@ public class SignalingHandler extends TextWebSocketHandler {
             return;
         }
 
-        // Reject if the room is at capacity — unless this peer is already a member (reconnect).
-        List<String> current = rooms.peersIn(msg.room()).stream().map(PeerInfo::id).toList();
+        // Reject if the room is at capacity cluster-wide — unless this peer is
+        // already a member (reconnect). On the Redis backplane this read-then-
+        // register pair is not atomic; simultaneous joins on different nodes can
+        // briefly overshoot the cap (see RedisBackplane).
+        List<PeerInfo> clusterPeers = backplane.peersIn(msg.room());
+        List<String> current = clusterPeers.stream().map(PeerInfo::id).toList();
         if (current.size() >= maxRoomSize && !current.contains(msg.from())) {
             log.info("Rejected {} from full room {} ({}/{})",
                     msg.from(), msg.room(), current.size(), maxRoomSize);
@@ -139,7 +158,11 @@ public class SignalingHandler extends TextWebSocketHandler {
         }
 
         String name = displayName(msg);
-        List<PeerInfo> existingPeers = rooms.join(msg.room(), msg.from(), name, session);
+        rooms.join(msg.room(), msg.from(), name, session);
+        backplane.register(msg.room(), msg.from(), name);
+        List<PeerInfo> existingPeers = clusterPeers.stream()
+                .filter(info -> !info.id().equals(msg.from()))
+                .toList();
         log.info("Peer {} ({}) joined room {} ({} existing peer(s))",
                 msg.from(), name, msg.room(), existingPeers.size());
 
@@ -161,6 +184,7 @@ public class SignalingHandler extends TextWebSocketHandler {
                 SignalMessage.TYPE_PEER_JOINED, msg.room(), msg.from(), null,
                 mapper.valueToTree(name));
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, joined));
+        backplane.publishToRoom(msg.room(), msg.from(), joined);
     }
 
     private void relayToPeer(WebSocketSession session, SignalMessage msg) {
@@ -169,11 +193,16 @@ public class SignalingHandler extends TextWebSocketHandler {
             return;
         }
         Optional<WebSocketSession> target = rooms.session(msg.room(), msg.to());
-        if (target.isEmpty()) {
-            sendError(session, msg.room(), "peer not found: " + msg.to());
+        if (target.isPresent()) {
+            send(target.get(), msg);
             return;
         }
-        send(target.get(), msg);
+        // Not on this node: route via the backplane if the directory knows the peer.
+        if (backplane.nodeOf(msg.room(), msg.to()).isPresent()) {
+            backplane.publishToPeer(msg.room(), msg.to(), msg);
+            return;
+        }
+        sendError(session, msg.room(), "peer not found: " + msg.to());
     }
 
     /** Persists a chat message, then fans it out to everyone else in the room. */
@@ -186,6 +215,7 @@ public class SignalingHandler extends TextWebSocketHandler {
         chat.append(msg.room(), new StoredMessage(
                 msg.from(), name, msg.payload().asText(), System.currentTimeMillis()));
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, msg));
+        backplane.publishToRoom(msg.room(), msg.from(), msg);
     }
 
     /** Fans an ephemeral message (media state, reaction, hand) out to the rest of the room. */
@@ -195,6 +225,7 @@ public class SignalingHandler extends TextWebSocketHandler {
             return;
         }
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, msg));
+        backplane.publishToRoom(msg.room(), msg.from(), msg);
     }
 
     private void handleLeave(WebSocketSession session) {
@@ -211,9 +242,11 @@ public class SignalingHandler extends TextWebSocketHandler {
 
     private void broadcastPeerLeft(RoomManager.PeerLocation location) {
         log.info("Peer {} left room {}", location.peerId(), location.room());
+        backplane.unregister(location.room(), location.peerId());
         SignalMessage left = new SignalMessage(
                 SignalMessage.TYPE_PEER_LEFT, location.room(), location.peerId(), null, null);
         rooms.othersIn(location.room(), location.peerId()).forEach(other -> send(other, left));
+        backplane.publishToRoom(location.room(), location.peerId(), left);
     }
 
     private void sendError(WebSocketSession session, String room, String reason) {

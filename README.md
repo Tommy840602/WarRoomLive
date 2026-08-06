@@ -78,6 +78,19 @@ docker compose -f docker-compose.yml -f docker-compose.oidc.yml up --build
 - **devidp** 是隨附的**僅供開發** IdP(固定測試帳號、記憶體金鑰),掛在同一 origin 的 `/auth` 之下。整個系統只講標準 OIDC(discovery + JWKS)——正式環境把 `OIDC_ISSUER` / `OIDC_JWK_SET_URI` / `OIDC_CLIENT_ID` 指向 Keycloak / Entra ID 等真正的 IdP 即可(例如 Keycloak 以 `KC_HTTP_RELATIVE_PATH=/auth` 掛同路徑),移除 devidp 服務。
 - 換網域/埠時設 `PUBLIC_ORIGIN`(預設 `http://localhost:8088`),JWT 的 `iss` 與前端 authority 都由它導出。
 
+## 水平擴展(選用疊加層):多節點信令 + 多實例協作
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.scale.yml up --build
+# backend x2 + collab x2,經 Redis 共享房間與文件
+```
+
+- **後端 `redis` profile**:房間成員目錄移到 Redis(hash,每個成員記錄所在節點),跨節點訊息(offer/answer/candidate 的點對點轉發、chat/state/reaction 等廣播)走 Redis Pub/Sub;`Backplane` 介面隔離,預設 profile 仍是零依賴的單機實作。
+- **節點崩潰自癒**:每個節點維護帶 TTL 的心跳鍵(15 秒),讀取房間成員時惰性清除「所在節點已死」的 ghost 成員。
+- **collab 多實例**:`REDIS_HOST` 設定後以 `@hocuspocus/extension-redis` 跨實例同步 Yjs update 與 awareness;快照仍寫 PostgreSQL。
+- **nginx 輪詢**:`/api`、`/ws`、`/ws/doc` 皆改為請求時 DNS 解析,docker DNS 將新連線輪流導向各副本;WebSocket 連線建立後黏在該副本上。
+- 已知取捨:房間人數上限的檢查在叢集模式下非原子(讀成員數與註冊是兩步),多節點同時加入可能短暫超額一兩人;收緊需 Lua script,已記錄於 `RedisBackplane`。
+
 ## 可觀測性(選用疊加層)
 
 ```bash
