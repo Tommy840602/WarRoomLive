@@ -1,0 +1,35 @@
+# Alertmanager routing for the observability overlay. The dev receiver is the
+# alert-logger container (webhook echo) so notification delivery is verifiable
+# locally; production swaps the receivers for Slack/email/PagerDuty and keeps
+# the routing tree.
+route:
+  receiver: dev-webhook
+  group_by: [alertname, severity]
+  group_wait: 15s
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    # Critical pages fire fast and on their own path.
+    - matchers:
+        - severity = "critical"
+      receiver: dev-webhook-critical
+      group_wait: 5s
+
+# A down scrape target makes its own warning-level alerts meaningless noise
+# (their metrics are absent or stale) — suppress them per job.
+inhibit_rules:
+  - source_matchers:
+      - alertname = "ScrapeTargetDown"
+    target_matchers:
+      - severity = "warning"
+    equal: [job]
+
+receivers:
+  - name: dev-webhook
+    webhook_configs:
+      - url: http://alert-logger:9095/alerts
+        send_resolved: true
+  - name: dev-webhook-critical
+    webhook_configs:
+      - url: http://alert-logger:9095/alerts
+        send_resolved: true

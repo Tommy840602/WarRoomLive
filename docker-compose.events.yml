@@ -22,6 +22,8 @@ services:
       - --smp=1
       - --kafka-addr=PLAINTEXT://0.0.0.0:9092
       - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      # Built-in schema registry: the envelope contract's source of truth.
+      - --schema-registry-addr=0.0.0.0:8081
 
   backend:
     environment:
@@ -43,6 +45,7 @@ services:
     build: ./indexer
     environment:
       KAFKA_BROKERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
       DB_HOST: db
       DB_PORT: "5432"
       DB_NAME: warroomlive

@@ -1,0 +1,45 @@
+# Opt-in object-storage archival, applied ON TOP of the backup overlay:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.backup.yml \
+#     -f docker-compose.backup-s3.yml up -d
+#   tests/dr/backup.sh              # base backup (shipped automatically)
+#   tests/dr/restore-s3-drill.sh    # PITR drill restoring FROM the bucket only
+#
+# A shipper sidecar rclone-syncs the backups volume (base backups + WAL) into
+# MinIO through a `crypt` remote: everything in the bucket is client-side
+# encrypted (contents and names) with BACKUP_PASSPHRASE — object storage never
+# sees plaintext. Production points the same shipper at real S3/GCS by swapping
+# the endpoint/credential envs; dev creds below are for the bundled MinIO only.
+services:
+  minio-backup:
+    image: minio/minio:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: warroom
+      MINIO_ROOT_PASSWORD: warroomsecret
+    volumes:
+      - minio-backup-data:/data
+
+  backup-shipper:
+    image: rclone/rclone:1.68
+    entrypoint: ["/bin/sh", "/shipper.sh"]
+    environment:
+      RCLONE_CONFIG_S3_TYPE: s3
+      RCLONE_CONFIG_S3_PROVIDER: Minio
+      RCLONE_CONFIG_S3_ENDPOINT: http://minio-backup:9000
+      RCLONE_CONFIG_S3_ACCESS_KEY_ID: warroom
+      RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: warroomsecret
+      RCLONE_CONFIG_CRYPT_TYPE: crypt
+      RCLONE_CONFIG_CRYPT_REMOTE: "s3:${BACKUP_BUCKET:-warroom-backups}"
+      BACKUP_BUCKET: ${BACKUP_BUCKET:-warroom-backups}
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:-warroom-dev-backup-passphrase}
+      SHIP_INTERVAL: ${SHIP_INTERVAL:-10}
+    volumes:
+      - backups:/backups:ro
+      - ./infrastructure/backup/shipper.sh:/shipper.sh:ro
+    depends_on:
+      - minio-backup
+      - db
+
+volumes:
+  minio-backup-data:
