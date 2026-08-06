@@ -29,6 +29,7 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
 - **靜音 / 關視訊**:本地切換 track 的 `enabled`,並透過 `state` 訊息把音視訊開關廣播給房間;其他成員的視訊標籤與成員名單會顯示對應圖示(🔇 / 📷)。新成員加入時,既有成員會重送一次自己的狀態,確保畫面同步。
 - **表情反應 / 舉手**:`reaction` 訊息廣播即時 emoji(👍 ❤️ 😂 🎉 👏),畫面上浮出淡出動畫;`hand` 訊息廣播舉手開關(✋),在視訊標籤與成員名單持續顯示。舉手狀態同樣會在新成員加入時重送。
 - **房間人數上限**:因 mesh 上行頻寬隨人數上升,後端對每間房設硬性上限(`warroomlive.signaling.max-room-size`,預設 8),額滿時以 `room-full` 拒絕加入;前端接近上限(6 人)顯示柔性警告橫幅(僅 mesh 模式)。需要更大房間時改用 SFU 疊加層(見下方)。
+- **房間權限(主持人 / 鎖定 / 踢人)**:開房者即主持人(👑,離開時自動交接給最資深成員);只有主持人能 **鎖定房間**(🔒 之後新成員以 `room-locked` 被拒,既有成員重連不受影響)與 **移出成員**(對方收到 `kicked` 通知後連線以 4403 關閉)。授權全部在伺服器端驗證——訊息的 `from` 必須等於該連線 join 時的身分,再比對 backplane 中的房間主持人;房間 meta(`room-state`:host + locked)在加入時下發、變更時廣播,多節點部署下由 Redis 原子維護。相應稽核事件:`participant.kicked`、`room.locked`、`room.unlocked`。
 - **聊天記錄持久化**:聊天訊息存進倉儲,加入房間時以 `history` 訊息重播最近記錄(重整或晚到都看得到)。倉儲有兩種實作,以 Spring profile 切換:
   - 預設(無 profile):記憶體環形緩衝(每房最近 `warroomlive.chat.history-limit` 則,預設 100),零依賴,伺服器重啟後消失。
   - `postgres` profile:Spring Data JPA + PostgreSQL,跨重啟耐久。啟用:`SPRING_PROFILES_ACTIVE=postgres`,並提供 `DB_URL` / `DB_USER` / `DB_PASSWORD`。Schema 由 **Flyway** 管理(`backend/src/main/resources/db/migration/`,含 collab 服務的表),Hibernate 只做 `validate`;既有資料庫以 baseline 無縫接軌。

@@ -15,10 +15,17 @@ import com.fasterxml.jackson.databind.JsonNode;
  *   <li>{@code state} — {@code from}'s media on/off flags, broadcast to the rest of the room.</li>
  *   <li>{@code reaction} — an ephemeral emoji from {@code from}, broadcast to the rest of the room.</li>
  *   <li>{@code hand} — {@code from}'s raise-hand flag, broadcast to the rest of the room.</li>
+ *   <li>{@code lock} — host asks to lock ({@code payload=true}) or unlock the room to newcomers.</li>
+ *   <li>{@code kick} — host asks to remove the peer named in {@code to} from the room.</li>
  *   <li>{@code peers} — server → client, the peers already in the room on join.</li>
  *   <li>{@code history} — server → client on join, the room's recent chat messages.</li>
  *   <li>{@code peer-joined} / {@code peer-left} — server → client room membership events.</li>
+ *   <li>{@code room-state} — server → client, the room's meta {@code {host, locked}} — sent to
+ *       the newcomer on join and broadcast whenever it changes (lock toggled, host handover).</li>
+ *   <li>{@code kicked} — server → the removed peer, right before its connection is closed (4403);
+ *       {@code payload} is the acting host's peer id.</li>
  *   <li>{@code room-full} — server → client, join rejected; {@code payload} is the room's capacity.</li>
+ *   <li>{@code room-locked} — server → client, join rejected because the room is locked.</li>
  *   <li>{@code error} — server → client, human-readable reason in {@code payload}.</li>
  * </ul>
  *
@@ -49,6 +56,11 @@ public record SignalMessage(
     public static final String TYPE_HISTORY = "history";
     public static final String TYPE_PEER_JOINED = "peer-joined";
     public static final String TYPE_PEER_LEFT = "peer-left";
+    public static final String TYPE_LOCK = "lock";
+    public static final String TYPE_KICK = "kick";
+    public static final String TYPE_KICKED = "kicked";
+    public static final String TYPE_ROOM_STATE = "room-state";
     public static final String TYPE_ROOM_FULL = "room-full";
+    public static final String TYPE_ROOM_LOCKED = "room-locked";
     public static final String TYPE_ERROR = "error";
 }

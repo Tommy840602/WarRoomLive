@@ -33,20 +33,47 @@ public interface Backplane {
     /** Returned by {@link #tryRegister} when the room is at capacity. */
     int REGISTER_REJECTED = -1;
 
+    /** Returned by {@link #tryRegister} when the room is locked to newcomers. */
+    int REGISTER_LOCKED = -2;
+
+    /**
+     * A room's cluster-wide meta state: the current host (the peer that opened the
+     * room, handed over to a remaining member when the host leaves) and whether
+     * the room is locked to newcomers. Lives and dies with the room — the state
+     * of an empty room is {@link #EMPTY}.
+     */
+    record RoomState(String hostId, boolean locked) {
+        public static final RoomState EMPTY = new RoomState(null, false);
+    }
+
+    /** The room's current meta state ({@link RoomState#EMPTY} if the room is empty). */
+    RoomState roomState(String room);
+
+    /**
+     * Sets the room's locked flag. Authorization (host-only) is the caller's
+     * responsibility — the backplane only stores cluster-wide state.
+     */
+    void setLocked(String room, boolean locked);
+
     /**
      * Atomically registers a peer (hosted on this node) in the cluster directory,
-     * unless the room already holds {@code maxRoomSize} members. Re-registering an
-     * existing member (reconnect) always succeeds. The capacity decision lives
-     * here so it is race-free per implementation (per-room compute locally, a Lua
-     * script on Redis).
+     * unless the room already holds {@code maxRoomSize} members or is locked.
+     * Re-registering an existing member (reconnect) always succeeds. The
+     * capacity/lock decision lives here so it is race-free per implementation
+     * (per-room compute locally, a Lua script on Redis). The same atomic step
+     * assigns the host: the peer that opens the room, or a replacement whenever
+     * the recorded host is no longer a member.
      *
      * @return the room's member count after registering (1 ⇒ this join opened the
-     *         room), or {@link #REGISTER_REJECTED} if the room is full
+     *         room), {@link #REGISTER_REJECTED} if the room is full, or
+     *         {@link #REGISTER_LOCKED} if it is locked
      */
     int tryRegister(String room, String peerId, String name, int maxRoomSize);
 
     /**
-     * Removes a peer from the cluster directory.
+     * Removes a peer from the cluster directory. If the departing peer was the
+     * host, the host role is handed to a remaining member in the same atomic
+     * step (the longest-present member locally; an arbitrary member on Redis).
      *
      * @return the members remaining in the room (0 ⇒ this leave closed the room)
      */

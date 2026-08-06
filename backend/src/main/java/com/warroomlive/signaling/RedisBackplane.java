@@ -120,6 +120,11 @@ public class RedisBackplane implements Backplane, org.springframework.context.Sm
         return "warroom:room:" + room;
     }
 
+    /** Room meta hash: fields {@code host} and {@code locked}; lives with the room. */
+    private static String metaKey(String room) {
+        return "warroom:roommeta:" + room;
+    }
+
     private static String nodeKey(String node) {
         return "warroom:node:" + node;
     }
@@ -145,30 +150,54 @@ public class RedisBackplane implements Backplane, org.springframework.context.Sm
         }
         if (peers.isEmpty()) {
             redis.opsForSet().remove(ROOMS_KEY, room);
+            // Ghost pruning can empty a room without an unregister; drop its meta too.
+            redis.delete(metaKey(room));
         }
         return peers;
     }
 
     /**
-     * KEYS[1]=room hash, KEYS[2]=rooms set; ARGV: peerId, entryJson, max, room.
-     * Returns the member count after registering, or -1 when the room is full.
+     * KEYS[1]=room hash, KEYS[2]=rooms set, KEYS[3]=meta hash; ARGV: peerId,
+     * entryJson, max, room. Returns the member count after registering, -1 when
+     * the room is full, or -2 when it is locked to newcomers. The same atomic
+     * step assigns the host: the opener, or a replacement whenever the recorded
+     * host is no longer a member.
      */
     private static final DefaultRedisScript<Long> TRY_REGISTER = new DefaultRedisScript<>("""
-            if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 0
-               and redis.call('HLEN', KEYS[1]) >= tonumber(ARGV[3]) then
-              return -1
+            if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 0 then
+              if redis.call('HGET', KEYS[3], 'locked') == '1' then
+                return -2
+              end
+              if redis.call('HLEN', KEYS[1]) >= tonumber(ARGV[3]) then
+                return -1
+              end
             end
             redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
             redis.call('SADD', KEYS[2], ARGV[4])
+            local host = redis.call('HGET', KEYS[3], 'host')
+            if not host or redis.call('HEXISTS', KEYS[1], host) == 0 then
+              redis.call('HSET', KEYS[3], 'host', ARGV[1])
+            end
             return redis.call('HLEN', KEYS[1])
             """, Long.class);
 
-    /** KEYS[1]=room hash, KEYS[2]=rooms set; ARGV: peerId, room. Returns members left. */
+    /**
+     * KEYS[1]=room hash, KEYS[2]=rooms set, KEYS[3]=meta hash; ARGV: peerId,
+     * room. Returns members left. The last leave deletes the meta (lock and host
+     * die with the room); a departing host hands the role to a remaining member.
+     */
     private static final DefaultRedisScript<Long> UNREGISTER = new DefaultRedisScript<>("""
             redis.call('HDEL', KEYS[1], ARGV[1])
             local remaining = redis.call('HLEN', KEYS[1])
             if remaining == 0 then
               redis.call('SREM', KEYS[2], ARGV[2])
+              redis.call('DEL', KEYS[3])
+              return remaining
+            end
+            local host = redis.call('HGET', KEYS[3], 'host')
+            if not host or redis.call('HEXISTS', KEYS[1], host) == 0 then
+              local members = redis.call('HKEYS', KEYS[1])
+              redis.call('HSET', KEYS[3], 'host', members[1])
             end
             return remaining
             """, Long.class);
@@ -177,7 +206,7 @@ public class RedisBackplane implements Backplane, org.springframework.context.Sm
     public int tryRegister(String room, String peerId, String name, int maxRoomSize) {
         try {
             Long result = redis.execute(TRY_REGISTER,
-                    List.of(roomKey(room), ROOMS_KEY),
+                    List.of(roomKey(room), ROOMS_KEY, metaKey(room)),
                     peerId,
                     mapper.writeValueAsString(new MemberEntry(name, nodeId)),
                     String.valueOf(maxRoomSize),
@@ -190,8 +219,24 @@ public class RedisBackplane implements Backplane, org.springframework.context.Sm
 
     @Override
     public int unregister(String room, String peerId) {
-        Long remaining = redis.execute(UNREGISTER, List.of(roomKey(room), ROOMS_KEY), peerId, room);
+        Long remaining = redis.execute(UNREGISTER,
+                List.of(roomKey(room), ROOMS_KEY, metaKey(room)), peerId, room);
         return remaining == null ? 0 : remaining.intValue();
+    }
+
+    @Override
+    public RoomState roomState(String room) {
+        Map<Object, Object> meta = redis.opsForHash().entries(metaKey(room));
+        if (meta.isEmpty()) {
+            return RoomState.EMPTY;
+        }
+        Object host = meta.get("host");
+        return new RoomState(host == null ? null : host.toString(), "1".equals(meta.get("locked")));
+    }
+
+    @Override
+    public void setLocked(String room, boolean locked) {
+        redis.opsForHash().put(metaKey(room), "locked", locked ? "1" : "0");
     }
 
     @Override

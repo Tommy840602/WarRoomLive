@@ -15,7 +15,12 @@ export type SignalType =
   | 'peers'
   | 'peer-joined'
   | 'peer-left'
+  | 'lock'
+  | 'kick'
+  | 'kicked'
+  | 'room-state'
   | 'room-full'
+  | 'room-locked'
   | 'error'
 
 /** Public identity of a peer, as carried in `peers` messages. */
@@ -28,6 +33,16 @@ export interface PeerInfo {
 export interface MediaState {
   audio: boolean
   video: boolean
+}
+
+/**
+ * The room's meta state, carried in `room-state` messages: the current host
+ * (empty while the room is empty) and whether newcomers are locked out. Sent on
+ * join and re-broadcast on every change (lock toggled, host handover).
+ */
+export interface RoomStateInfo {
+  host: string
+  locked: boolean
 }
 
 /** A persisted chat message, carried in the `history` message on join. */

@@ -69,6 +69,15 @@ public class RoomManager {
         return Optional.of(location);
     }
 
+    /**
+     * The room/peer this session joined as, if any. Privileged operations use
+     * this to bind a message's claimed {@code from} to the sending connection —
+     * a client cannot act as a peer it did not join as.
+     */
+    public Optional<PeerLocation> locationOf(WebSocketSession session) {
+        return Optional.ofNullable(sessionIndex.get(session.getId()));
+    }
+
     /** Returns the peers currently in the room (empty if the room is unknown). */
     public List<PeerInfo> peersIn(String room) {
         Map<String, Member> members = rooms.get(room);
