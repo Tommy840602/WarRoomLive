@@ -23,11 +23,42 @@ const { CompressionCodecs, CompressionTypes, Kafka, logLevel } = kafkajs
 
 // Envelope contract (bundled copy of docs/contracts/warroom-event.schema.json;
 // CI asserts the two stay identical). Schema-invalid envelopes are poison.
+//
+// With SCHEMA_REGISTRY_URL set (events overlay → Redpanda's built-in registry),
+// the registry is the source of truth: on startup the bundled schema is
+// registered under `warroom.events-value` (a no-op when identical — the
+// registry dedupes), and validation compiles whatever the registry serves as
+// latest, so independently-evolved consumers converge on one contract. Without
+// a registry (or if it is down at startup) the bundled copy applies.
 const ajv = new Ajv({ allErrors: false })
 addFormats(ajv)
-const validateEnvelope = ajv.compile(
-  JSON.parse(readFileSync(new URL('./warroom-event.schema.json', import.meta.url), 'utf8')),
+const bundledSchema = JSON.parse(
+  readFileSync(new URL('./warroom-event.schema.json', import.meta.url), 'utf8'),
 )
+const SCHEMA_SUBJECT = 'warroom.events-value'
+
+async function loadEnvelopeSchema() {
+  const registry = process.env.SCHEMA_REGISTRY_URL
+  if (!registry) return { schema: bundledSchema, source: 'bundled' }
+  try {
+    await fetch(`${registry}/subjects/${SCHEMA_SUBJECT}/versions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/vnd.schemaregistry.v1+json' },
+      body: JSON.stringify({ schemaType: 'JSON', schema: JSON.stringify(bundledSchema) }),
+    })
+    const res = await fetch(`${registry}/subjects/${SCHEMA_SUBJECT}/versions/latest`)
+    if (!res.ok) throw new Error(`registry replied ${res.status}`)
+    const body = await res.json()
+    return { schema: JSON.parse(body.schema), source: `registry v${body.version}` }
+  } catch (e) {
+    console.warn(`schema registry unavailable (${e.message}); using bundled schema`)
+    return { schema: bundledSchema, source: 'bundled (registry unreachable)' }
+  }
+}
+
+const { schema: envelopeSchema, source: schemaSource } = await loadEnvelopeSchema()
+console.log(`envelope schema: ${schemaSource}`)
+const validateEnvelope = ajv.compile(envelopeSchema)
 
 // Producers we don't control (rpk, other services) may compress with snappy,
 // which kafkajs does not decode out of the box.

@@ -137,7 +137,7 @@ docker compose -f docker-compose.yml -f docker-compose.events.yml up --build
 - 語義為 **at-least-once**:broker 斷線只會累積 backlog(Prometheus 指標 `warroomlive_events_backlog`),恢復後按序補發;消費端須以信封中的 `eventId` 去重。信封含 `eventId` / `eventType` / `aggregateType` / `aggregateId` / `schemaVersion` / `occurredAt` / `payload`。
 - 檢視事件:`docker compose ... exec redpanda rpk topic consume warroom.events --num 5`。
 - **事件類型**:`chat.message.created`(與訊息同交易)、`participant.joined` / `participant.left`(信令層)、`document.snapshot.created`(collab 服務在快照交易內直接寫**同一張** outbox 表,由後端 publisher 統一發布)。
-- **事件契約**:信封的 JSON Schema 在 `docs/contracts/warroom-event.schema.json`(indexer 內帶副本,CI 驗證兩檔一致);indexer 以 ajv 驗證每個信封,違反契約的訊息列為毒訊息計數後跳過。多團隊生產事件時再升級為託管 Schema Registry。
+- **事件契約**:信封的 JSON Schema 在 `docs/contracts/warroom-event.schema.json`(indexer 內帶副本,CI 驗證兩檔一致);indexer 以 ajv 驗證每個信封,違反契約的訊息列為毒訊息計數後跳過。**Schema Registry**:events 疊加層開啟 Redpanda 內建的 registry(`:8081`),indexer 啟動時把內帶 schema 註冊到 subject `warroom.events-value`(相同內容不會產生新版本),之後以 registry 的 latest 版本編譯驗證器——契約的單一真實來源移到 registry,獨立演進的消費端會收斂到同一份契約;未設 `SCHEMA_REGISTRY_URL` 或 registry 不可達時退回內帶副本。
 - **消費端範例(`indexer/`)**:訂閱 `warroom.events`,以 `event_id` 主鍵冪等寫入兩個可重建的讀模型——`audit_log`(全事件稽核軌跡)與 `message_search`(訊息全文檢索,Postgres FTS + GIN;之後可換 OpenSearch)。兩個投影在同一交易提交,offset 於寫入後才提交,毒訊息計數後跳過、DB 錯誤重試。查詢:`GET /api/search/messages?q=關鍵字&room=房名`(`postgres` profile;結果來自事件管線,需 events 疊加層在跑)。
 
 ## 可觀測性(選用疊加層)
@@ -153,6 +153,26 @@ docker compose -f docker-compose.yml -f docker-compose.observability.yml up --bu
 - **分散式追蹤**:後端以 OTLP 送 **Tempo**(overlay 設 `TRACING_ENABLED=true`;預設關閉零成本),Grafana 已接 Tempo datasource。
 - **Grafana dashboard**「WarRoomLive Overview」自動 provision(連線數、訊息速率、CRDT update、事件 backlog/發布率等)。
 - **告警規則**(`infrastructure/observability/alerts.yml`):scrape target down、outbox backlog 累積、collab 拒連暴增、信令處理超過 20ms SLO。
+- **告警通知路由**(`infrastructure/observability/alertmanager.yml`,`:9093`):分組(alertname + severity)、critical 走快速通道(group_wait 5s)、**抑制規則**(某 job 的 scrape target 掛掉時,壓下同 job 的 warning 告警——它們的指標本來就已失真)。開發用接收端是 `alert-logger` webhook 容器,可用 `docker compose logs alert-logger` 直接看到通知送達;正式環境只換 receivers(Slack/Email/PagerDuty),路由樹不動。
+
+## 備份、DR 與壓測(選用疊加層 + 手動套件)
+
+```bash
+# WAL 歸檔 + PITR 還原演練
+docker compose -f docker-compose.yml -f docker-compose.backup.yml up -d
+tests/dr/restore-drill.sh
+
+# 再疊上物件儲存歸檔(加密)後,改跑「只從 bucket 還原」的演練
+docker compose -f docker-compose.yml -f docker-compose.backup.yml \
+  -f docker-compose.backup-s3.yml up -d
+tests/dr/restore-s3-drill.sh
+```
+
+- **備份與 DR**:backup 疊加層開 WAL 歸檔;backup-s3 疊加層再以 rclone `crypt` remote 把基礎備份與 WAL **客戶端加密**後同步進 MinIO(連檔名都是密文),還原演練完全只靠 bucket。詳見 `docs/runbooks/disaster-recovery.md`。
+- **壓測**:`tests/load/`(k6 信令 SLO 壓測、`crdt-replay.mjs` CRDT 冷重建基準、`rtc-load.sh` LiveKit 媒體壓測)與 `tests/chaos/`(Toxiproxy)。實測數字與抓到的缺陷記在 `docs/runbooks/load-testing.md`。
+- **Redis 故障轉移演練**:`tests/ha/failover-drill.sh`(見上方 HA 疊加層)。
+
+以上皆不在 CI 跑,需對著實際跑起來的 stack 手動執行。
 
 ## 正式對外:HTTPS(TLS 反向代理)
 

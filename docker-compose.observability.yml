@@ -26,6 +26,37 @@ services:
     volumes:
       - ./infrastructure/observability/tempo.yml:/etc/tempo.yml:ro
 
+  # Notification routing for the alert rules (grouping, inhibition, receivers).
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ./infrastructure/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+
+  # Dev-only webhook receiver: logs every notification so delivery is
+  # verifiable (`docker compose logs alert-logger`). Production replaces the
+  # receivers in alertmanager.yml — this container then has no traffic.
+  alert-logger:
+    image: node:20-alpine
+    command:
+      - node
+      - -e
+      - |
+        require('http').createServer((req, res) => {
+          let body = ''
+          req.on('data', (c) => (body += c))
+          req.on('end', () => {
+            try {
+              const n = JSON.parse(body)
+              n.alerts?.forEach((a) => console.log(
+                'ALERT', a.status, a.labels.alertname,
+                'severity=' + a.labels.severity, 'job=' + (a.labels.job ?? '-')))
+            } catch { console.log('ALERT raw', body) }
+            res.end('ok')
+          })
+        }).listen(9095, () => console.log('alert-logger listening on :9095'))
+
   backend:
     environment:
       TRACING_ENABLED: "true"
