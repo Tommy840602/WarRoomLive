@@ -5,6 +5,9 @@
 # On hosts where browsers cannot reach the container network directly
 # (macOS/Windows, or remote users), set rtc.node_ip to a reachable address.
 port: 7880
+# WebRTC quality metrics (packet loss, RTT, bitrate…) for the observability
+# overlay's Prometheus (target livekit:6789; down when this overlay is off).
+prometheus_port: 6789
 rtc:
   tcp_port: 7881
   udp_port: 7882

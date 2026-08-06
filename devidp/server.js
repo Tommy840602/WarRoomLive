@@ -28,6 +28,9 @@ const jwk = { ...(await exportJWK(publicKey)), kid: 'devidp', alg: 'RS256', use:
 /** code → { sub, nonce, redirectUri, codeChallenge, clientId, expiresAt } */
 const codes = new Map()
 
+/** refresh token → { sub, clientId }; rotated on every use (dev: no expiry). */
+const refreshTokens = new Map()
+
 async function signToken(claims, audience) {
   const now = Math.floor(Date.now() / 1000)
   return new SignJWT(claims)
@@ -42,9 +45,12 @@ async function signToken(claims, audience) {
 async function tokenResponse(sub, clientId, nonce) {
   const user = USERS[sub]
   const identity = { sub, preferred_username: sub, name: user.name }
+  const refreshToken = randomUUID()
+  refreshTokens.set(refreshToken, { sub, clientId })
   return {
     access_token: await signToken({ ...identity, scope: 'openid profile' }, 'warroomlive'),
     id_token: await signToken(nonce ? { ...identity, nonce } : identity, clientId),
+    refresh_token: refreshToken,
     token_type: 'Bearer',
     expires_in: tokenTtlSeconds,
     scope: 'openid profile',
@@ -94,7 +100,7 @@ createServer(async (req, res) => {
           token_endpoint: `${issuer}/token`,
           jwks_uri: `${issuer}/jwks`,
           response_types_supported: ['code'],
-          grant_types_supported: ['authorization_code', 'password'],
+          grant_types_supported: ['authorization_code', 'refresh_token', 'password'],
           code_challenge_methods_supported: ['S256'],
           id_token_signing_alg_values_supported: ['RS256'],
           subject_types_supported: ['public'],
@@ -139,6 +145,14 @@ createServer(async (req, res) => {
             return json(res, 400, { error: 'invalid_grant', error_description: 'bad credentials' })
           }
           return json(res, 200, await tokenResponse(username, form.get('client_id') ?? 'warroomlive-web', null))
+        }
+        if (form.get('grant_type') === 'refresh_token') {
+          const grant = refreshTokens.get(form.get('refresh_token'))
+          refreshTokens.delete(form.get('refresh_token')) // rotate: single use
+          if (!grant) {
+            return json(res, 400, { error: 'invalid_grant', error_description: 'unknown refresh token' })
+          }
+          return json(res, 200, await tokenResponse(grant.sub, grant.clientId, null))
         }
         if (form.get('grant_type') !== 'authorization_code') {
           return json(res, 400, { error: 'unsupported_grant_type' })

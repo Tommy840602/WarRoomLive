@@ -13,11 +13,23 @@ services:
     image: prom/prometheus:v3.13.2
     volumes:
       - ./infrastructure/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
     depends_on:
       - backend
       - collab
+
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ./infrastructure/observability/tempo.yml:/etc/tempo.yml:ro
+
+  backend:
+    environment:
+      TRACING_ENABLED: "true"
+      OTLP_TRACES_ENDPOINT: http://tempo:4318/v1/traces
 
   grafana:
     image: grafana/grafana:latest
@@ -27,7 +39,10 @@ services:
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
     volumes:
       - ./infrastructure/observability/grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - ./infrastructure/observability/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/warroomlive.yml:ro
+      - ./infrastructure/observability/dashboard-warroomlive.json:/var/lib/grafana/dashboards/warroomlive.json:ro
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
     depends_on:
       - prometheus
+      - tempo

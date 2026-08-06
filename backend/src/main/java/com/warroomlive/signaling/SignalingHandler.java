@@ -104,6 +104,20 @@ public class SignalingHandler extends TextWebSocketHandler {
     }
 
     private void handleParsedMessage(WebSocketSession session, TextMessage message) {
+        // Per-message credential check (oidc mode): a connection whose handshake
+        // token has expired is closed — the client must reconnect with a renewed
+        // token. 4401 mirrors HTTP 401 in the private close-code range.
+        Object expiry = session.getAttributes().get(com.warroomlive.config.WebSocketConfig.TOKEN_EXPIRY_ATTRIBUTE);
+        if (expiry instanceof Long expiresAtMillis && System.currentTimeMillis() > expiresAtMillis) {
+            log.info("Closing session {}: handshake token expired", session.getId());
+            countIn("token-expired");
+            try {
+                session.close(new CloseStatus(4401, "access token expired"));
+            } catch (IOException e) {
+                log.warn("Failed to close expired session {}: {}", session.getId(), e.getMessage());
+            }
+            return;
+        }
         SignalMessage msg;
         try {
             msg = mapper.readValue(message.getPayload(), SignalMessage.class);

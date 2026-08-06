@@ -11,12 +11,23 @@
 // committed only after the rows are written, so a crash re-consumes (and
 // dedupes) rather than losing events.
 import { createServer } from 'node:http'
+import { readFileSync } from 'node:fs'
+import Ajv from 'ajv/dist/2020.js'
+import addFormats from 'ajv-formats'
 import kafkajs from 'kafkajs'
 import SnappyCodec from 'kafkajs-snappy'
 import pg from 'pg'
 import * as prom from 'prom-client'
 
 const { CompressionCodecs, CompressionTypes, Kafka, logLevel } = kafkajs
+
+// Envelope contract (bundled copy of docs/contracts/warroom-event.schema.json;
+// CI asserts the two stay identical). Schema-invalid envelopes are poison.
+const ajv = new Ajv({ allErrors: false })
+addFormats(ajv)
+const validateEnvelope = ajv.compile(
+  JSON.parse(readFileSync(new URL('./warroom-event.schema.json', import.meta.url), 'utf8')),
+)
 
 // Producers we don't control (rpk, other services) may compress with snappy,
 // which kafkajs does not decode out of the box.
@@ -131,7 +142,9 @@ await consumer.run({
     let envelope
     try {
       envelope = JSON.parse(message.value.toString())
-      if (!envelope.eventId || !envelope.eventType) throw new Error('missing eventId/eventType')
+      if (!validateEnvelope(envelope)) {
+        throw new Error('contract violation: ' + ajv.errorsText(validateEnvelope.errors))
+      }
     } catch (err) {
       // Poison messages must not wedge the partition: count, log, move on.
       mFailed.inc()

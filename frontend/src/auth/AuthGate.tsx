@@ -65,7 +65,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
         response_type: 'code',
         scope: 'openid profile',
         loadUserInfo: false,
-        automaticSilentRenew: false,
+        // Renews via the refresh-token grant before the access token expires,
+        // so API calls and (re)connections always carry a valid token.
+        automaticSilentRenew: true,
         userStore: new WebStorageStateStore({ store: window.sessionStorage }),
       })
       managerRef.current = manager
@@ -78,6 +80,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
         })
         setPhase('ready')
       }
+
+      // Keep the context's token fresh after every silent renewal.
+      manager.events.addUserLoaded((user) => {
+        if (!cancelled) apply(user)
+      })
 
       const params = new URLSearchParams(window.location.search)
       try {

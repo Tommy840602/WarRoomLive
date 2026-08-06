@@ -64,6 +64,17 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Distributed tracing via OTLP (off by default; the observability overlay
+             enables it and points the exporter at Tempo). -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+
         <!-- Chat persistence. JPA/DataSource auto-config is excluded by default
              (in-memory repository) and re-enabled under the 'postgres' profile. -->
         <dependency>

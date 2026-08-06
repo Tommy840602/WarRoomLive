@@ -17,6 +17,7 @@ services:
     environment:
       PORT: "8089"
       ISSUER: ${PUBLIC_ORIGIN:-http://localhost:8088}/auth
+      TOKEN_TTL_SECONDS: ${DEVIDP_TOKEN_TTL:-1800}
 
   backend:
     environment:

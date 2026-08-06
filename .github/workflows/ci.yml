@@ -97,6 +97,9 @@ jobs:
       - name: Syntax check
         run: node --check server.js
 
+      - name: Contract copy in sync
+        run: diff warroom-event.schema.json ../docs/contracts/warroom-event.schema.json
+
   devidp:
     name: Dev IdP (Node 20)
     runs-on: ubuntu-latest
