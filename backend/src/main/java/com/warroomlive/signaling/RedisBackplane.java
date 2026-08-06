@@ -42,7 +42,7 @@ import java.util.UUID;
  */
 @Component
 @Profile("redis")
-public class RedisBackplane implements Backplane {
+public class RedisBackplane implements Backplane, org.springframework.context.SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(RedisBackplane.class);
 
@@ -74,9 +74,41 @@ public class RedisBackplane implements Backplane {
 
     @Override
     public void start(LocalDelivery delivery) {
+        // Wiring only — the first Redis command must NOT run here: this is called
+        // from a bean constructor, i.e. while the caller holds the bean-factory
+        // singleton lock. Lettuce records command latency on its event loop, and
+        // the first record triggers the Prometheus exemplar tracer lookup, which
+        // needs that same lock — a startup deadlock. First I/O happens in the
+        // SmartLifecycle start() below, after singletons are instantiated.
         this.delivery = delivery;
+    }
+
+    // SmartLifecycle: first heartbeat after singleton instantiation (lock-free).
+    // Phase 0 starts before the web server (Integer.MAX_VALUE - 1), so the node's
+    // heartbeat key exists before any join can be registered — otherwise another
+    // node could prune this node's members as ghosts in that window.
+    private volatile boolean running;
+
+    @Override
+    public int getPhase() {
+        return 0;
+    }
+
+    @Override
+    public void start() {
         heartbeat();
+        running = true;
         log.info("Redis backplane active, node id {}", nodeId);
+    }
+
+    @Override
+    public void stop() {
+        running = false;
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
     }
 
     @Scheduled(fixedRate = 5000)

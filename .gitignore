@@ -4,6 +4,7 @@ backend/target/
 
 # --- Node / Vite (frontend) ---
 tests/dr/node_modules/
+tests/ha/node_modules/
 devidp/node_modules/
 collab/node_modules/
 indexer/node_modules/

@@ -191,8 +191,22 @@ const extensions = [metricsEndpoint, guards, updateLog]
 
 // Multi-instance mode: with REDIS_HOST set, Hocuspocus instances sync document
 // updates and awareness through Redis, so replicas can serve the same documents
-// (see docker-compose.scale.yml). Unset in local dev → single instance, no Redis.
-if (process.env.REDIS_HOST) {
+// (see docker-compose.scale.yml). With REDIS_SENTINEL_NODES set (ha overlay),
+// the connection goes through Sentinel and follows master failovers. Unset in
+// local dev → single instance, no Redis.
+if (process.env.REDIS_SENTINEL_NODES) {
+  const sentinels = process.env.REDIS_SENTINEL_NODES.split(',').map((node) => {
+    const [host, port] = node.trim().split(':')
+    return { host, port: Number(port ?? 26379) }
+  })
+  const IORedis = (await import('ioredis')).default
+  extensions.push(
+    new RedisSync({
+      redis: new IORedis({ sentinels, name: process.env.REDIS_SENTINEL_MASTER ?? 'warroom' }),
+    }),
+  )
+  console.log(`collab service: syncing via Redis Sentinel (${process.env.REDIS_SENTINEL_NODES})`)
+} else if (process.env.REDIS_HOST) {
   extensions.push(
     new RedisSync({
       host: process.env.REDIS_HOST,

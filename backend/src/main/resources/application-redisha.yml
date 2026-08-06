@@ -1,0 +1,9 @@
+# Sentinel-backed Redis for the backplane. Activate together with 'redis'
+# (e.g. "postgres,redis,redisha" — see docker-compose.ha.yml): Lettuce then
+# discovers the current master via Sentinel and follows failovers automatically.
+spring:
+  data:
+    redis:
+      sentinel:
+        master: ${REDIS_SENTINEL_MASTER:warroom}
+        nodes: ${REDIS_SENTINEL_NODES:sentinel-1:26379,sentinel-2:26379,sentinel-3:26379}
