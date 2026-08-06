@@ -155,6 +155,28 @@ docker compose -f docker-compose.yml -f docker-compose.observability.yml up --bu
 - **告警規則**(`infrastructure/observability/alerts.yml`):scrape target down、outbox backlog 累積、collab 拒連暴增、信令處理超過 20ms SLO。
 - **告警通知路由**(`infrastructure/observability/alertmanager.yml`,`:9093`):分組(alertname + severity)、critical 走快速通道(group_wait 5s)、**抑制規則**(某 job 的 scrape target 掛掉時,壓下同 job 的 warning 告警——它們的指標本來就已失真)。開發用接收端是 `alert-logger` webhook 容器,可用 `docker compose logs alert-logger` 直接看到通知送達;正式環境只換 receivers(Slack/Email/PagerDuty),路由樹不動。
 
+## 端到端測試(確認本機跑起來的 stack 一切正常)
+
+```bash
+docker compose up -d
+npm --prefix tests/e2e ci        # 只需一次
+
+tests/e2e/run.sh                 # 自動挑選目前 stack 支援的套件
+tests/e2e/run.sh signaling crdt  # 指定套件
+tests/e2e/run.sh --all           # 含破壞性套件(殺服務驗恢復)
+```
+
+所有套件都經由 nginx 單一入口(`:8088`)操作,和瀏覽器走同一條路徑,因此代理路由、profile 接線與疊加層拓撲都在測試範圍內。`run.sh` 依「目前實際在跑什麼」挑套件,所以同一行指令在基本 stack 與任何疊加層組合上都適用:
+
+| 套件 | 需要 | 涵蓋 |
+|---|---|---|
+| `signaling` / `room-acl` / `crdt` / `capacity` | 任何 stack | 信令與成員事件、房間權限(主持人/鎖房/踢人)、CRDT 收斂、房間上限的原子性 |
+| `oidc` / `token-lifecycle` | oidc 疊加層 | 兩個 WS 平面的認證強制;refresh 輪替與 token 過期後 4401 斷線 |
+| `events` | events 疊加層 | 活動 → outbox → Redpanda → indexer → 讀模型 → 搜尋 API,以及重放去重 |
+| `crdt-hardening` / `scale` | 破壞性 | 快照前崩潰的耐久性、超大更新拒絕與壓縮;跨 collab 副本收斂與節點死亡後的 ghost 清理 |
+
+詳細說明見 `tests/e2e/README.md`。
+
 ## 備份、DR 與壓測(選用疊加層 + 手動套件)
 
 ```bash

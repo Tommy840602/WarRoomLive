@@ -168,7 +168,22 @@ async function index(envelope) {
 // within ~30s instead of kafkajs's 5-minute default.
 const kafka = new Kafka({ clientId: 'warroom-indexer', brokers, logLevel: logLevel.WARN, metadataMaxAge: 30000 })
 const consumer = kafka.consumer({ groupId, metadataMaxAge: 30000 })
-await consumer.connect()
+
+// A broker that is not up yet is a transient condition, not a reason to die:
+// on a cold start the whole stack comes up at once and the broker regularly
+// outlasts kafkajs's own retry budget. Exiting here would leave the consumer
+// permanently down (compose only waits for the container, not for the port),
+// so keep retrying — the same posture as the DB errors handled below.
+for (let attempt = 1; ; attempt++) {
+  try {
+    await consumer.connect()
+    break
+  } catch (err) {
+    const wait = Math.min(30000, 1000 * 2 ** Math.min(attempt, 5))
+    console.warn(`indexer: broker unreachable (${err.message}); retrying in ${wait / 1000}s`)
+    await new Promise((r) => setTimeout(r, wait))
+  }
+}
 await consumer.subscribe({ topic, fromBeginning: true })
 await consumer.run({
   eachMessage: async ({ message }) => {
