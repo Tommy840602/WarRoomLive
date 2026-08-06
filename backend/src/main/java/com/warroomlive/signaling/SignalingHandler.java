@@ -3,9 +3,11 @@ package com.warroomlive.signaling;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.warroomlive.chat.ChatRepository;
 import com.warroomlive.chat.StoredMessage;
+import com.warroomlive.events.OutboxRecorder;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
+import org.springframework.beans.factory.ObjectProvider;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
@@ -41,6 +43,8 @@ public class SignalingHandler extends TextWebSocketHandler {
     private final Backplane backplane;
     private final ObjectMapper mapper;
     private final ChatRepository chat;
+    /** Present only under the kafka profile; membership events are skipped without it. */
+    private final ObjectProvider<OutboxRecorder> outbox;
     private final int maxRoomSize;
     private final int historyLimit;
 
@@ -56,6 +60,7 @@ public class SignalingHandler extends TextWebSocketHandler {
             Backplane backplane,
             ObjectMapper mapper,
             ChatRepository chat,
+            ObjectProvider<OutboxRecorder> outbox,
             MeterRegistry metrics,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-room-size:8}") int maxRoomSize,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.history-limit:100}") int historyLimit) {
@@ -63,6 +68,7 @@ public class SignalingHandler extends TextWebSocketHandler {
         this.backplane = backplane;
         this.mapper = mapper;
         this.chat = chat;
+        this.outbox = outbox;
         this.metrics = metrics;
         this.maxRoomSize = maxRoomSize;
         this.historyLimit = historyLimit;
@@ -181,6 +187,8 @@ public class SignalingHandler extends TextWebSocketHandler {
                 mapper.valueToTree(name));
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, joined));
         backplane.publishToRoom(msg.room(), msg.from(), joined);
+        outbox.ifAvailable(recorder -> recorder.record(
+                "participant.joined", "room", msg.room(), Map.of("peerId", msg.from(), "name", name)));
     }
 
     private void relayToPeer(WebSocketSession session, SignalMessage msg) {
@@ -243,6 +251,8 @@ public class SignalingHandler extends TextWebSocketHandler {
                 SignalMessage.TYPE_PEER_LEFT, location.room(), location.peerId(), null, null);
         rooms.othersIn(location.room(), location.peerId()).forEach(other -> send(other, left));
         backplane.publishToRoom(location.room(), location.peerId(), left);
+        outbox.ifAvailable(recorder -> recorder.record(
+                "participant.left", "room", location.room(), Map.of("peerId", location.peerId())));
     }
 
     private void sendError(WebSocketSession session, String room, String reason) {

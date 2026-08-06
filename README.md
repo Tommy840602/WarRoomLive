@@ -110,6 +110,8 @@ docker compose -f docker-compose.yml -f docker-compose.events.yml up --build
 - 後端加上 `kafka` profile(需搭配 `postgres`):聊天訊息與其 `chat.message.created` 事件**在同一筆交易**寫入(`outbox_events` 表,V3 遷移),`OutboxPublisher` 每秒輪詢未發布列(`FOR UPDATE SKIP LOCKED`,多副本可並行不重工)推送到 Kafka 相容的 Redpanda(主題 `warroom.events`)。
 - 語義為 **at-least-once**:broker 斷線只會累積 backlog(Prometheus 指標 `warroomlive_events_backlog`),恢復後按序補發;消費端須以信封中的 `eventId` 去重。信封含 `eventId` / `eventType` / `aggregateType` / `aggregateId` / `schemaVersion` / `occurredAt` / `payload`。
 - 檢視事件:`docker compose ... exec redpanda rpk topic consume warroom.events --num 5`。
+- **事件類型**:`chat.message.created`(與訊息同交易)、`participant.joined` / `participant.left`(信令層)、`document.snapshot.created`(collab 服務在快照交易內直接寫**同一張** outbox 表,由後端 publisher 統一發布)。
+- **消費端範例(`indexer/`)**:訂閱 `warroom.events`,以 `event_id` 主鍵冪等寫入兩個可重建的讀模型——`audit_log`(全事件稽核軌跡)與 `message_search`(訊息全文檢索,Postgres FTS + GIN;之後可換 OpenSearch)。兩個投影在同一交易提交,offset 於寫入後才提交,毒訊息計數後跳過、DB 錯誤重試。查詢:`GET /api/search/messages?q=關鍵字&room=房名`(`postgres` profile;結果來自事件管線,需 events 疊加層在跑)。
 
 ## 可觀測性(選用疊加層)
 

@@ -23,6 +23,9 @@ import pg from 'pg'
 import * as prom from 'prom-client'
 
 const port = Number(process.env.PORT ?? 1234)
+// Emit document.snapshot.created into the shared outbox (events overlay only —
+// without the backend's kafka-profile publisher the rows would just pile up).
+const eventsEnabled = process.env.EVENTS_ENABLED === 'true'
 const MAX_UPDATE_BYTES = Number(process.env.COLLAB_MAX_UPDATE_BYTES ?? 512 * 1024)
 const MAX_DOC_BYTES = Number(process.env.COLLAB_MAX_DOC_BYTES ?? 5 * 1024 * 1024)
 const MAX_MESSAGES_PER_SECOND = Number(process.env.COLLAB_MAX_MESSAGES_PER_SECOND ?? 120)
@@ -57,6 +60,22 @@ try {
   await candidate.query(
     'CREATE INDEX IF NOT EXISTS collab_update_name_id ON collab_update (name, id)',
   )
+  if (eventsEnabled) {
+    // Fallback for starting before the backend has run Flyway (V3 owns this).
+    await candidate.query(`
+      CREATE TABLE IF NOT EXISTS outbox_events (
+        id             bigserial PRIMARY KEY,
+        event_id       uuid         NOT NULL UNIQUE,
+        event_type     varchar(100) NOT NULL,
+        aggregate_type varchar(50)  NOT NULL,
+        aggregate_id   varchar(255) NOT NULL,
+        schema_version int          NOT NULL DEFAULT 1,
+        payload        jsonb        NOT NULL,
+        occurred_at    timestamptz  NOT NULL DEFAULT now(),
+        published_at   timestamptz
+      )
+    `)
+  }
   pool = candidate
   console.log('collab service: persisting documents to PostgreSQL')
 } catch (err) {
@@ -207,22 +226,38 @@ if (pool) {
       },
       store: async ({ documentName, state }) => {
         const done = mStore.startTimer()
+        const client = await pool.connect()
         try {
           // Read before any await: inserts completing after this point stay in the
           // log and are replayed on the next load (Yjs merges are idempotent).
           const coveredId = lastLoggedId.get(documentName) ?? 0
-          await pool.query(
+          await client.query('BEGIN')
+          await client.query(
             `INSERT INTO collab_document (name, data, updated_at)
              VALUES ($1, $2, now())
              ON CONFLICT (name) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
             [documentName, state],
           )
-          await pool.query('DELETE FROM collab_update WHERE name = $1 AND id <= $2', [
+          await client.query('DELETE FROM collab_update WHERE name = $1 AND id <= $2', [
             documentName,
             coveredId,
           ])
+          if (eventsEnabled) {
+            // Same transactional-outbox table the backend publishes from: the
+            // snapshot and its event commit or roll back together.
+            await client.query(
+              `INSERT INTO outbox_events (event_id, event_type, aggregate_type, aggregate_id, schema_version, payload)
+               VALUES (gen_random_uuid(), 'document.snapshot.created', 'document', $1, 1, $2::jsonb)`,
+              [documentName, JSON.stringify({ sizeBytes: state.byteLength })],
+            )
+          }
+          await client.query('COMMIT')
           docSizes.set(documentName, state.byteLength)
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {})
+          throw err
         } finally {
+          client.release()
           done()
         }
       },

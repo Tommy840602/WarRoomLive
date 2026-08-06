@@ -5,6 +5,7 @@ backend/target/
 # --- Node / Vite (frontend) ---
 devidp/node_modules/
 collab/node_modules/
+indexer/node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/

@@ -32,3 +32,24 @@ services:
         condition: service_healthy
       redpanda:
         condition: service_started
+
+  collab:
+    environment:
+      EVENTS_ENABLED: "true"
+
+  # Example consumer: builds the audit_log and message_search read models
+  # (served by GET /api/search/messages), deduping on eventId.
+  indexer:
+    build: ./indexer
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: warroomlive
+      DB_USER: warroomlive
+      DB_PASSWORD: warroomlive
+    depends_on:
+      db:
+        condition: service_healthy
+      redpanda:
+        condition: service_started
