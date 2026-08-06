@@ -12,6 +12,36 @@ export function defaultDocUrl(): string {
   return `${scheme}://${window.location.host}/ws/doc`
 }
 
+/**
+ * Caps awareness broadcasts (cursor moves, selections) to ~25 Hz with a
+ * trailing-edge flush, per the blueprint's 20–30 Hz guidance. Returns a restore
+ * function for cleanup.
+ */
+function throttleAwareness(provider: HocuspocusProvider, intervalMs = 40): () => void {
+  const awareness = provider.awareness
+  if (!awareness) return () => {}
+  const original = awareness.setLocalStateField.bind(awareness)
+  const queued = new Map<string, unknown>()
+  let lastFlush = 0
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const flush = () => {
+    timer = null
+    lastFlush = Date.now()
+    queued.forEach((value, field) => original(field, value))
+    queued.clear()
+  }
+  awareness.setLocalStateField = (field: string, value: unknown) => {
+    queued.set(field, value)
+    const elapsed = Date.now() - lastFlush
+    if (elapsed >= intervalMs) flush()
+    else if (!timer) timer = setTimeout(flush, intervalMs - elapsed)
+  }
+  return () => {
+    if (timer) clearTimeout(timer)
+    awareness.setLocalStateField = original
+  }
+}
+
 /** Stable per-user cursor color, derived from the display name. */
 const CURSOR_COLORS = ['#f783ac', '#74b816', '#1c7ed6', '#f59f00', '#be4bdb', '#0ca678', '#e8590c', '#7048e8']
 function colorFor(name: string): string {
@@ -43,8 +73,10 @@ export function CollabNotes({ room, userName }: CollabNotesProps) {
       document: doc,
       onStatus: ({ status }) => setConnected(status === WebSocketStatus.Connected),
     })
+    const restoreAwareness = throttleAwareness(provider)
     setSession({ doc, provider })
     return () => {
+      restoreAwareness()
       provider.destroy()
       doc.destroy()
       setSession(null)
