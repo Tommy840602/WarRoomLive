@@ -3,6 +3,7 @@ import { SignalingClient, defaultSignalingUrl } from './signaling/SignalingClien
 import { WebRtcRoom } from './webrtc/WebRtcRoom'
 import { VideoTile } from './components/VideoTile'
 import { ChatPanel } from './components/ChatPanel'
+import { CollabNotes } from './components/CollabNotes'
 import { MemberList, type Member } from './components/MemberList'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
@@ -405,6 +406,10 @@ export default function App() {
           />
         </div>
       </section>
+
+      {status === 'in-room' && (
+        <CollabNotes room={room} userName={name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`} />
+      )}
 
       <FloatingReactions reactions={reactions} />
     </main>

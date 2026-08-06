@@ -4,16 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-**WarRoomLive** — a low-latency, multi-user cross-department collaboration room. Participants share audio/video and data over **WebRTC**; a **WebSocket** channel carries signaling. It is a monorepo with a React (TypeScript) frontend and a Java Spring Boot backend.
+**WarRoomLive** — a low-latency, multi-user cross-department collaboration room. Real-time traffic is split across three planes: **WebRTC** for audio/video media, **WebSocket** for signaling and business events, and **Yjs CRDT** for collaborative shared notes. It is a monorepo with a React (TypeScript) frontend, a Java Spring Boot backend, and a Node collab service.
 
 ## Layout
 
 - `backend/` — Spring Boot 3.3 signaling server (Java 21, Maven).
 - `frontend/` — React 18 + TypeScript, built with Vite.
+- `collab/` — Node 20 Hocuspocus (Yjs) document-sync service on `:1234`; persists document snapshots to Postgres when reachable, else memory-only.
+- `docs/architecture/roadmap.md` — phased plan mapping the target production tech stack onto this codebase; consult it before starting a new architectural increment.
 - `README.md` — architecture diagram and run instructions (keep in sync with this file).
 - `AGENTS.md`, `.github/agents/` — workspace agent conventions.
 - `.github/workflows/ci.yml` — CI: runs `mvn verify` (backend) and `npm ci && npm run build` (frontend) on push/PR to `main`. Keep the toolchain versions here in step with the Java/Node versions above.
-- `docker-compose.yml` + `backend/Dockerfile` + `frontend/Dockerfile` (nginx, `frontend/nginx.conf`) — full-stack deploy (`docker compose up --build`, opens on `:8088`). The frontend nginx reverse-proxies `/api` and `/ws` to `backend:8080`, so the browser uses a single origin; the backend runs the `postgres` profile against the `db` service. CI does not build images — verify Docker changes by running the stack.
+- `docker-compose.yml` + `backend/Dockerfile` + `frontend/Dockerfile` (nginx, `frontend/nginx.conf`) + `collab/Dockerfile` — full-stack deploy (`docker compose up --build`, opens on `:8088`). The frontend nginx reverse-proxies `/api` and `/ws` to `backend:8080` and `/ws/doc` to `collab:1234`, so the browser uses a single origin; the backend runs the `postgres` profile against the `db` service and the collab service persists to the same `db`. CI does not build images — verify Docker changes by running the stack.
 - `docker-compose.tls.yml` + `Caddyfile` — opt-in TLS overlay. Adds a Caddy edge that terminates TLS (automatic Let's Encrypt via `SITE_ADDRESS`, or its internal CA for `localhost`) and reverse-proxies to the frontend; the overlay clears the frontend's published ports with `!override []`. Apply with `-f docker-compose.yml -f docker-compose.tls.yml`. The base compose stays plaintext for simple local runs.
 
 ## Commands
@@ -26,9 +28,13 @@ Backend (`cd backend`):
 
 Frontend (`cd frontend`):
 - `npm install` — install dependencies (first run).
-- `npm run dev` — Vite dev server on `:5173`; proxies `/api` and `/ws` to the backend on `:8080`.
+- `npm run dev` — Vite dev server on `:5173`; proxies `/api` and `/ws` to the backend on `:8080`, and `/ws/doc` to the collab service on `:1234`.
 - `npm run build` — type-check (`tsc`) then production build into `dist/`.
 - `npm run typecheck` — type-check only.
+
+Collab service (`cd collab`):
+- `npm install` — install dependencies (first run).
+- `npm start` — run Hocuspocus on `ws://localhost:1234`. Persists to Postgres if reachable (env: `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD`), otherwise runs memory-only. Optional for local dev — everything except shared notes works without it.
 
 Local end-to-end: run the backend and `npm run dev` together, then open two browser tabs on `localhost:5173` and join the same room. `getUserMedia` only works on `localhost` or HTTPS.
 
@@ -42,6 +48,7 @@ The signaling server **never touches media** — it only relays SDP offers/answe
 - **Room membership state is in-memory** (`RoomManager`, a single process). Horizontal scaling would need a shared backplane (e.g. Redis pub/sub).
 - **Chat persistence is behind `ChatRepository`** (`chat/` package) with two profile-selected implementations: `InMemoryChatRepository` (default, `@Profile("!postgres")`, bounded ring buffer) and `JpaChatRepository` (`@Profile("postgres")`, Postgres). Because `spring-boot-starter-data-jpa` is always on the classpath, the default profile **excludes** the JPA/DataSource auto-configs in `application.yml`; `application-postgres.yml` clears that exclusion. If you add a second JPA repository, both profiles must still start — keep the exclusion list in sync. On join the server replays recent chat as a `history` message.
 - WebSocket allowed origins are configured via `warroomlive.signaling.allowed-origins` in `application.yml` (`*` for local dev; lock down per environment).
+- **Shared notes are a separate CRDT plane**: `CollabNotes` (frontend, TipTap + Yjs) syncs through the `collab/` Hocuspocus service at `/ws/doc` — never through the signaling socket. One Yjs document per room, named `warroom:<room>`. Durable state (document snapshots) goes to Postgres table `collab_document`; ephemeral state (cursors, awareness) is relayed only. The signaling `SignalMessage` contract is not involved; don't add note-related message types to it.
 
 ## Conventions
 

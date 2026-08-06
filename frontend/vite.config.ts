@@ -9,6 +9,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': { target: 'http://localhost:8080', changeOrigin: true },
+      // Longest prefix first: collab-doc sync goes to the Hocuspocus service.
+      '/ws/doc': { target: 'ws://localhost:1234', ws: true },
       '/ws': { target: 'ws://localhost:8080', ws: true },
     },
   },

@@ -1,6 +1,6 @@
 # WarRoomLive
 
-低延遲、多人在線的跨部門協作討論室。前端 React (TypeScript) + 後端 Java Spring,即時通訊採用 **WebRTC**(音視訊/資料),並以 **WebSocket** 作為 signaling 通道。
+低延遲、多人在線的跨部門協作討論室。前端 React (TypeScript) + 後端 Java Spring,即時通訊分三個平面:**WebRTC**(音視訊媒體)、**WebSocket**(signaling 與業務事件)、**CRDT(Yjs)**(共同筆記協作編輯)。
 
 ## 架構總覽
 
@@ -10,8 +10,13 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
 │ App.tsx                    │   WS /ws/signal  │ SignalingHandler             │
 │  └ WebRtcRoom (mesh)       │◀────────────────▶│  └ RoomManager (rooms/peers) │
 │      └ SignalingClient     │   JSON envelopes │                              │
-│ getUserMedia → RTCPeerConn │                  │ GET /api/health              │
-└───────────────────────────┘                  └──────────────────────────────┘
+│  └ CollabNotes (TipTap)    │                  │ GET /api/health              │
+│ getUserMedia → RTCPeerConn │                  └──────────────────────────────┘
+└───────────┬───────────────┘                  collab (Hocuspocus/Yjs, :1234)
+        ▲   │                  WS /ws/doc       ┌──────────────────────────────┐
+        │   └───────────────────────────────────▶ Yjs CRDT sync + awareness    │
+        │                     binary updates    │  └ snapshots → PostgreSQL    │
+        │                                       └──────────────────────────────┘
         ▲   媒體(SRTP)直接在 peer 之間流動,不經過伺服器   ▲
         └──────────────────── WebRTC P2P ───────────────────┘
 ```
@@ -27,18 +32,20 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
 - **聊天記錄持久化**:聊天訊息存進倉儲,加入房間時以 `history` 訊息重播最近記錄(重整或晚到都看得到)。倉儲有兩種實作,以 Spring profile 切換:
   - 預設(無 profile):記憶體環形緩衝(每房最近 `warroomlive.chat.history-limit` 則,預設 100),零依賴,伺服器重啟後消失。
   - `postgres` profile:Spring Data JPA + PostgreSQL,跨重啟耐久。啟用:`SPRING_PROFILES_ACTIVE=postgres`,並提供 `DB_URL` / `DB_USER` / `DB_PASSWORD`。
+- **共同筆記(CRDT 協作編輯)**:房間內所有人同時編輯同一份筆記,採 Yjs CRDT 無衝突合併——前端 TipTap 編輯器 + `y-prosemirror`,經 `/ws/doc` 連到獨立的 **collab 服務**(Node + Hocuspocus)。游標與名稱走 ephemeral awareness(不落地);文件內容以 Yjs 二進位快照持久化到 PostgreSQL(`collab_document` 表),重啟或晚加入都能還原。每個房間對應一份文件(`warroom:<房名>`)。
 
 ## Docker 部署(完整 stack)
 
-一鍵啟動 Postgres + 後端 + 前端(nginx),讓別人能實際連上:
+一鍵啟動 Postgres + 後端 + collab 服務 + 前端(nginx),讓別人能實際連上:
 
 ```bash
 docker compose up --build
 # 開啟 http://localhost:8088(埠可用 FRONTEND_PORT 覆寫,如 FRONTEND_PORT=8091 docker compose up)
 ```
 
-- `frontend`(nginx):服務前端靜態檔,並把 `/api` 與 `/ws`(含 WebSocket upgrade)反向代理到 `backend`,所以瀏覽器只需連前端這一個 origin。
+- `frontend`(nginx):服務前端靜態檔,並反向代理 `/api`、`/ws`(→ `backend`)與 `/ws/doc`(→ `collab`,含 WebSocket upgrade),所以瀏覽器只需連前端這一個 origin。
 - `backend`:以 `postgres` profile 執行,資料源指向 `db` 服務。
+- `collab`:Hocuspocus(Yjs)文件同步服務,文件快照持久化到同一個 `db`。
 - `db`:PostgreSQL,資料存於具名 volume `pgdata`(`docker compose down -v` 才會清除)。
 
 > 前端使用相對路徑與 `window.location.host` 組出 WebSocket URL,因此不論部署在哪個網域/埠都不需改設定。
@@ -79,7 +86,7 @@ mvn spring-boot:run
 
 不帶 profile 執行則自動使用記憶體儲存,無需資料庫。
 - **Full mesh 拓撲**:每個參與者與其他人各建立一條 `RTCPeerConnection`。小群組(約 6–8 人內)最簡單、延遲最低;規模再大時應改用 SFU。
-- 開發時前端 Vite dev server 會把 `/api` 與 `/ws` 代理到後端 `:8080`,瀏覽器只需與 `:5173` 溝通。
+- 開發時前端 Vite dev server 會把 `/api`、`/ws` 代理到後端 `:8080`、`/ws/doc` 代理到 collab 服務 `:1234`,瀏覽器只需與 `:5173` 溝通。
 
 Signaling 訊息格式(前後端共用)定義於 `frontend/src/signaling/types.ts` 與 `backend/.../signaling/SignalMessage.java`,新增訊息類型時兩邊要同步。
 
@@ -108,10 +115,21 @@ npm run build              # 型別檢查 + 產出 dist/
 npm run typecheck          # 只做型別檢查
 ```
 
+## Collab 服務(collab/)
+
+```bash
+cd collab
+npm install
+npm start                  # Hocuspocus 於 ws://localhost:1234
+```
+
+啟動時若連得上 PostgreSQL 就持久化文件快照;連不上則自動降級為純記憶體(與後端聊天儲存同一哲學)。環境變數:`PORT`(預設 1234)、`DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD`(預設對應本機 `warroomlive`)。
+
 ## 本地端到端試跑
 
-1. 一個終端機:`cd backend && mvn spring-boot:run`
-2. 另一個終端機:`cd frontend && npm run dev`
-3. 用兩個瀏覽器分頁開啟 http://localhost:5173,輸入相同房間名稱後各自「加入房間」,即可看到彼此的視訊。
+1. 一個終端機:`cd collab && npm start`(共同筆記;不啟動它其餘功能照常)
+2. 一個終端機:`cd backend && mvn spring-boot:run`
+3. 另一個終端機:`cd frontend && npm run dev`
+4. 用兩個瀏覽器分頁開啟 http://localhost:5173,輸入相同房間名稱後各自「加入房間」,即可看到彼此的視訊,並在下方「共同筆記」同時編輯。
 
 > WebRTC 需要 `getUserMedia`,瀏覽器僅允許在 `localhost` 或 HTTPS 下使用攝影機/麥克風。
