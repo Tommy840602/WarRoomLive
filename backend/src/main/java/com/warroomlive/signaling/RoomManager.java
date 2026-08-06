@@ -89,6 +89,16 @@ public class RoomManager {
         return Optional.ofNullable(member == null ? null : member.session());
     }
 
+    /** Number of rooms with at least one connected peer. */
+    public int roomCount() {
+        return rooms.size();
+    }
+
+    /** Number of connected peers across all rooms. */
+    public int memberCount() {
+        return sessionIndex.size();
+    }
+
     /** Returns every session in a room except the excluded peer — used for broadcasts. */
     public List<WebSocketSession> othersIn(String room, String excludePeerId) {
         Map<String, Member> members = rooms.get(room);

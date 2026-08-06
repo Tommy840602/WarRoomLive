@@ -3,6 +3,8 @@ package com.warroomlive.signaling;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.warroomlive.chat.ChatRepository;
 import com.warroomlive.chat.StoredMessage;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * WebSocket endpoint that relays WebRTC signaling between peers sharing a room.
@@ -35,6 +38,7 @@ public class SignalingHandler extends TextWebSocketHandler {
     private static final int SEND_BUFFER_LIMIT_BYTES = 512 * 1024;
 
     private final RoomManager rooms;
+    private final Backplane backplane;
     private final ObjectMapper mapper;
     private final ChatRepository chat;
     private final int maxRoomSize;
@@ -43,38 +47,69 @@ public class SignalingHandler extends TextWebSocketHandler {
     /** Wraps raw sessions so concurrent sends from multiple peers are serialized safely. */
     private final Map<String, ConcurrentWebSocketSessionDecorator> safeSessions = new ConcurrentHashMap<>();
 
+    private final MeterRegistry metrics;
+    private final AtomicInteger connectionsActive = new AtomicInteger();
+    private final Timer processingTimer;
+
     public SignalingHandler(
             RoomManager rooms,
+            Backplane backplane,
             ObjectMapper mapper,
             ChatRepository chat,
+            MeterRegistry metrics,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-room-size:8}") int maxRoomSize,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.history-limit:100}") int historyLimit) {
         this.rooms = rooms;
+        this.backplane = backplane;
         this.mapper = mapper;
         this.chat = chat;
+        this.metrics = metrics;
         this.maxRoomSize = maxRoomSize;
         this.historyLimit = historyLimit;
+        metrics.gauge("warroomlive.signaling.connections.active", connectionsActive);
+        this.processingTimer = Timer.builder("warroomlive.signaling.message.processing")
+                .description("Time spent handling one inbound signaling message")
+                .register(metrics);
+        // Deliver backplane traffic from other nodes into this node's sessions.
+        backplane.start(new Backplane.LocalDelivery() {
+            @Override
+            public void toPeer(String room, String peerId, SignalMessage message) {
+                rooms.session(room, peerId).ifPresent(s -> send(s, message));
+            }
+
+            @Override
+            public void toRoomExcept(String room, String excludePeerId, SignalMessage message) {
+                rooms.othersIn(room, excludePeerId).forEach(s -> send(s, message));
+            }
+        });
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         safeSessions.put(session.getId(), new ConcurrentWebSocketSessionDecorator(
                 session, SEND_TIME_LIMIT_MS, SEND_BUFFER_LIMIT_BYTES));
+        connectionsActive.incrementAndGet();
         log.debug("WebSocket connected: {}", session.getId());
     }
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+        processingTimer.record(() -> handleParsedMessage(session, message));
+    }
+
+    private void handleParsedMessage(WebSocketSession session, TextMessage message) {
         SignalMessage msg;
         try {
             msg = mapper.readValue(message.getPayload(), SignalMessage.class);
         } catch (Exception e) {
             log.warn("Dropping malformed signaling message from {}: {}", session.getId(), e.getMessage());
+            countIn("malformed");
             sendError(session, null, "malformed message");
             return;
         }
 
         if (msg.type() == null) {
+            countIn("malformed");
             sendError(session, null, "missing message type");
             return;
         }
@@ -87,8 +122,18 @@ public class SignalingHandler extends TextWebSocketHandler {
             case SignalMessage.TYPE_STATE, SignalMessage.TYPE_REACTION, SignalMessage.TYPE_HAND ->
                     broadcastToRoom(session, msg);
             case SignalMessage.TYPE_LEAVE -> handleLeave(session);
-            default -> sendError(session, msg.room(), "unsupported message type: " + msg.type());
+            default -> {
+                countIn("unsupported");
+                sendError(session, msg.room(), "unsupported message type: " + msg.type());
+                return;
+            }
         }
+        countIn(msg.type());
+    }
+
+    /** The inbound type tag is bounded: known protocol types plus malformed/unsupported. */
+    private void countIn(String type) {
+        metrics.counter("warroomlive.signaling.messages.in", "type", type).increment();
     }
 
     private void handleJoin(WebSocketSession session, SignalMessage msg) {
@@ -97,8 +142,12 @@ public class SignalingHandler extends TextWebSocketHandler {
             return;
         }
 
-        // Reject if the room is at capacity — unless this peer is already a member (reconnect).
-        List<String> current = rooms.peersIn(msg.room()).stream().map(PeerInfo::id).toList();
+        // Reject if the room is at capacity cluster-wide — unless this peer is
+        // already a member (reconnect). On the Redis backplane this read-then-
+        // register pair is not atomic; simultaneous joins on different nodes can
+        // briefly overshoot the cap (see RedisBackplane).
+        List<PeerInfo> clusterPeers = backplane.peersIn(msg.room());
+        List<String> current = clusterPeers.stream().map(PeerInfo::id).toList();
         if (current.size() >= maxRoomSize && !current.contains(msg.from())) {
             log.info("Rejected {} from full room {} ({}/{})",
                     msg.from(), msg.room(), current.size(), maxRoomSize);
@@ -109,7 +158,11 @@ public class SignalingHandler extends TextWebSocketHandler {
         }
 
         String name = displayName(msg);
-        List<PeerInfo> existingPeers = rooms.join(msg.room(), msg.from(), name, session);
+        rooms.join(msg.room(), msg.from(), name, session);
+        backplane.register(msg.room(), msg.from(), name);
+        List<PeerInfo> existingPeers = clusterPeers.stream()
+                .filter(info -> !info.id().equals(msg.from()))
+                .toList();
         log.info("Peer {} ({}) joined room {} ({} existing peer(s))",
                 msg.from(), name, msg.room(), existingPeers.size());
 
@@ -131,6 +184,7 @@ public class SignalingHandler extends TextWebSocketHandler {
                 SignalMessage.TYPE_PEER_JOINED, msg.room(), msg.from(), null,
                 mapper.valueToTree(name));
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, joined));
+        backplane.publishToRoom(msg.room(), msg.from(), joined);
     }
 
     private void relayToPeer(WebSocketSession session, SignalMessage msg) {
@@ -139,11 +193,16 @@ public class SignalingHandler extends TextWebSocketHandler {
             return;
         }
         Optional<WebSocketSession> target = rooms.session(msg.room(), msg.to());
-        if (target.isEmpty()) {
-            sendError(session, msg.room(), "peer not found: " + msg.to());
+        if (target.isPresent()) {
+            send(target.get(), msg);
             return;
         }
-        send(target.get(), msg);
+        // Not on this node: route via the backplane if the directory knows the peer.
+        if (backplane.nodeOf(msg.room(), msg.to()).isPresent()) {
+            backplane.publishToPeer(msg.room(), msg.to(), msg);
+            return;
+        }
+        sendError(session, msg.room(), "peer not found: " + msg.to());
     }
 
     /** Persists a chat message, then fans it out to everyone else in the room. */
@@ -156,6 +215,7 @@ public class SignalingHandler extends TextWebSocketHandler {
         chat.append(msg.room(), new StoredMessage(
                 msg.from(), name, msg.payload().asText(), System.currentTimeMillis()));
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, msg));
+        backplane.publishToRoom(msg.room(), msg.from(), msg);
     }
 
     /** Fans an ephemeral message (media state, reaction, hand) out to the rest of the room. */
@@ -165,6 +225,7 @@ public class SignalingHandler extends TextWebSocketHandler {
             return;
         }
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, msg));
+        backplane.publishToRoom(msg.room(), msg.from(), msg);
     }
 
     private void handleLeave(WebSocketSession session) {
@@ -174,15 +235,18 @@ public class SignalingHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         safeSessions.remove(session.getId());
+        connectionsActive.decrementAndGet();
         rooms.remove(session).ifPresent(this::broadcastPeerLeft);
         log.debug("WebSocket closed: {} ({})", session.getId(), status);
     }
 
     private void broadcastPeerLeft(RoomManager.PeerLocation location) {
         log.info("Peer {} left room {}", location.peerId(), location.room());
+        backplane.unregister(location.room(), location.peerId());
         SignalMessage left = new SignalMessage(
                 SignalMessage.TYPE_PEER_LEFT, location.room(), location.peerId(), null, null);
         rooms.othersIn(location.room(), location.peerId()).forEach(other -> send(other, left));
+        backplane.publishToRoom(location.room(), location.peerId(), left);
     }
 
     private void sendError(WebSocketSession session, String room, String reason) {
@@ -198,6 +262,7 @@ public class SignalingHandler extends TextWebSocketHandler {
         }
         try {
             sink.sendMessage(new TextMessage(mapper.writeValueAsString(message)));
+            metrics.counter("warroomlive.signaling.messages.out", "type", message.type()).increment();
         } catch (IOException e) {
             log.warn("Failed to send {} to {}: {}", message.type(), session.getId(), e.getMessage());
         }

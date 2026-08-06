@@ -9,6 +9,10 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': { target: 'http://localhost:8080', changeOrigin: true },
+      // Dev IdP (only relevant when running the backend with the oidc profile).
+      '/auth': { target: 'http://localhost:8089' },
+      // Longest prefix first: collab-doc sync goes to the Hocuspocus service.
+      '/ws/doc': { target: 'ws://localhost:1234', ws: true },
       '/ws': { target: 'ws://localhost:8080', ws: true },
     },
   },

@@ -31,6 +31,32 @@
             <artifactId>spring-boot-starter-websocket</artifactId>
         </dependency>
 
+        <!-- JWT validation for the 'oidc' profile; the default profile installs a
+             permit-all filter chain so no identity provider is required locally. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+
+        <!-- Cross-node backplane for the 'redis' profile (membership directory +
+             pub/sub routing); the default profile never opens a connection. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!-- Prometheus metrics at /actuator/prometheus (not proxied by nginx; scraped
+             from inside the compose network by the observability overlay). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- Chat persistence. JPA/DataSource auto-config is excluded by default
              (in-memory repository) and re-enabled under the 'postgres' profile. -->
         <dependency>

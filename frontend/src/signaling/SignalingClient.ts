@@ -58,8 +58,13 @@ export class SignalingClient {
   }
 }
 
-/** Resolves the signaling URL from the current page origin (works behind the Vite proxy). */
-export function defaultSignalingUrl(): string {
+/**
+ * Resolves the signaling URL from the current page origin (works behind the Vite
+ * proxy). Browsers cannot set headers on WebSocket handshakes, so when OIDC is
+ * active the bearer token rides as an `access_token` query parameter (RFC 6750).
+ */
+export function defaultSignalingUrl(token?: string | null): string {
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${scheme}://${window.location.host}/ws/signal`
+  const base = `${scheme}://${window.location.host}/ws/signal`
+  return token ? `${base}?access_token=${encodeURIComponent(token)}` : base
 }

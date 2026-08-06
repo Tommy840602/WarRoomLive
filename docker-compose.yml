@@ -1,4 +1,4 @@
-# Full stack: Postgres + Spring Boot backend + nginx-served frontend.
+# Full stack: Postgres + Spring Boot backend + Yjs collab service + nginx-served frontend.
 # Start with: docker compose up --build
 # Then open http://localhost:8088 (override the port with FRONTEND_PORT).
 services:
@@ -29,12 +29,25 @@ services:
       db:
         condition: service_healthy
 
+  collab:
+    build: ./collab
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: warroomlive
+      DB_USER: warroomlive
+      DB_PASSWORD: warroomlive
+    depends_on:
+      db:
+        condition: service_healthy
+
   frontend:
     build: ./frontend
     ports:
       - "${FRONTEND_PORT:-8088}:80"
     depends_on:
       - backend
+      - collab
 
 volumes:
   pgdata:

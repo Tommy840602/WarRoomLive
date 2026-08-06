@@ -52,3 +52,47 @@ jobs:
 
       - name: Build (type-check + bundle)
         run: npm run build
+
+  collab:
+    name: Collab service (Node 20)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: collab
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: collab/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Syntax check
+        run: node --check server.js
+
+  devidp:
+    name: Dev IdP (Node 20)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: devidp
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: devidp/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Syntax check
+        run: node --check server.js

@@ -1,0 +1,14 @@
+# Horizontal-scaling mode. Activate by adding 'redis' to SPRING_PROFILES_ACTIVE
+# (combine with the others, e.g. "postgres,redis"). Room membership moves to a
+# Redis directory and signaling fans out across nodes over Redis pub/sub, so any
+# number of backend replicas can serve the same rooms (see docker-compose.scale.yml).
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+management:
+  health:
+    redis:
+      enabled: true

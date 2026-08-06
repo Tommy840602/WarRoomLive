@@ -296,6 +296,98 @@
   font-size: 0.75rem;
 }
 
+.auth {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.auth h1 {
+  margin: 0;
+}
+
+.auth button {
+  padding: 0.55rem 1.5rem;
+  border: none;
+  border-radius: 6px;
+  background: #3b82f6;
+  color: white;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.auth__status {
+  color: #9aa0a6;
+}
+
+.notes {
+  margin-top: 1rem;
+  border: 1px solid #2a2f38;
+  border-radius: 10px;
+  background: #12151b;
+  overflow: hidden;
+}
+
+.notes__title {
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.95rem;
+  border-bottom: 1px solid #2a2f38;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.notes__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6b7280;
+}
+
+.notes__dot--on {
+  background: #22c55e;
+}
+
+.notes__content .notes__editor {
+  min-height: 160px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 0.75rem 0.9rem;
+  outline: none;
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.notes__editor p {
+  margin: 0.3rem 0;
+}
+
+/* Remote-cursor caret + name label rendered by the collaboration-cursor extension. */
+.collaboration-cursor__caret {
+  border-left: 1px solid currentColor;
+  border-right: 1px solid currentColor;
+  margin-left: -1px;
+  margin-right: -1px;
+  position: relative;
+  word-break: normal;
+  pointer-events: none;
+}
+
+.collaboration-cursor__label {
+  position: absolute;
+  top: -1.3em;
+  left: -1px;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px 4px 4px 0;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #0d1117;
+  white-space: nowrap;
+  user-select: none;
+}
+
 .chat {
   display: flex;
   flex-direction: column;

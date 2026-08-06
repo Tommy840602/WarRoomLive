@@ -1,12 +1,21 @@
 import { useCallback, useRef, useState } from 'react'
 import { SignalingClient, defaultSignalingUrl } from './signaling/SignalingClient'
 import { WebRtcRoom } from './webrtc/WebRtcRoom'
+import {
+  SfuRoom,
+  fetchMediaConfig,
+  fetchMediaToken,
+  resolveLivekitUrl,
+  type MediaRoom,
+} from './webrtc/SfuRoom'
 import { VideoTile } from './components/VideoTile'
 import { ChatPanel } from './components/ChatPanel'
+import { CollabNotes } from './components/CollabNotes'
 import { MemberList, type Member } from './components/MemberList'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
 import type { MediaState, PeerInfo, StoredMessage } from './signaling/types'
+import { useAuth } from './auth/AuthGate'
 import './App.css'
 
 type Status = 'idle' | 'connecting' | 'in-room' | 'error'
@@ -25,8 +34,10 @@ interface ChatEntry {
 }
 
 export default function App() {
+  const { token, displayName: authName } = useAuth()
   const [room, setRoom] = useState('war-room')
-  const [name, setName] = useState('')
+  // With OIDC active the identity provider supplies the name; it stays editable.
+  const [name, setName] = useState(authName ?? '')
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState<string | null>(null)
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
@@ -40,9 +51,10 @@ export default function App() {
   const [handRaised, setHandRaised] = useState(false)
   const [raisedHands, setRaisedHands] = useState<Set<string>>(new Set())
   const [reactions, setReactions] = useState<FloatingReaction[]>([])
+  const [mediaMode, setMediaMode] = useState<'mesh' | 'sfu'>('mesh')
 
   const clientRef = useRef<SignalingClient | null>(null)
-  const roomRef = useRef<WebRtcRoom | null>(null)
+  const roomRef = useRef<MediaRoom | null>(null)
   const selfIdRef = useRef<string>(crypto.randomUUID())
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const screenStreamRef = useRef<MediaStream | null>(null)
@@ -114,7 +126,7 @@ export default function App() {
       cameraStreamRef.current = stream
       setLocalStream(stream)
 
-      const client = new SignalingClient(defaultSignalingUrl())
+      const client = new SignalingClient(defaultSignalingUrl(token))
       await client.connect()
       clientRef.current = client
 
@@ -199,26 +211,42 @@ export default function App() {
         ]),
       )
 
-      const webRtcRoom = new WebRtcRoom(client, selfIdRef.current, stream, {
-        onRemoteStream: (peerId, remote) =>
+      const mediaEvents = {
+        onRemoteStream: (peerId: string, remote: MediaStream) =>
           setRemoteStreams((prev) => new Map(prev).set(peerId, remote)),
-        onPeerLeft: (peerId) =>
+        onPeerLeft: (peerId: string) =>
           setRemoteStreams((prev) => {
             const next = new Map(prev)
             next.delete(peerId)
             return next
           }),
-        onError: (reason) => setError(reason),
-      })
-      roomRef.current = webRtcRoom
+        onError: (reason: string) => setError(reason),
+      }
+
       const displayName = name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`
-      webRtcRoom.join(room, displayName)
+
+      // The backend decides the media transport: SFU (LiveKit) when configured,
+      // else the built-in full mesh. Signaling is identical in both modes.
+      const media = await fetchMediaConfig(token)
+      setMediaMode(media.mode)
+      let mediaRoom: MediaRoom
+      if (media.mode === 'sfu') {
+        const lkToken = await fetchMediaToken(room, selfIdRef.current, displayName, token)
+        mediaRoom = new SfuRoom(client, selfIdRef.current, stream, mediaEvents, {
+          url: resolveLivekitUrl(media.livekitUrl),
+          token: lkToken,
+        })
+      } else {
+        mediaRoom = new WebRtcRoom(client, selfIdRef.current, stream, mediaEvents)
+      }
+      roomRef.current = mediaRoom
+      mediaRoom.join(room, displayName)
       setStatus('in-room')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setStatus('error')
     }
-  }, [room, name, teardown, showReaction])
+  }, [room, name, token, teardown, showReaction])
 
   const leave = useCallback(() => {
     roomRef.current?.leave(room)
@@ -358,7 +386,7 @@ export default function App() {
 
       {error && <p className="app__error">⚠️ {error}</p>}
 
-      {status === 'in-room' && members.length >= ROOM_WARN_THRESHOLD && (
+      {status === 'in-room' && mediaMode === 'mesh' && members.length >= ROOM_WARN_THRESHOLD && (
         <p className="app__warning">
           ⚠️ 房間目前 {members.length} 人。此版本採 WebRTC full mesh,人數偏多時上行頻寬與畫面可能開始卡頓(上限 8 人)。
         </p>
@@ -405,6 +433,14 @@ export default function App() {
           />
         </div>
       </section>
+
+      {status === 'in-room' && (
+        <CollabNotes
+          room={room}
+          userName={name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`}
+          token={token}
+        />
+      )}
 
       <FloatingReactions reactions={reactions} />
     </main>

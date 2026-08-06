@@ -1,0 +1,37 @@
+# Opt-in OIDC overlay: requires login for signaling and shared notes.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.oidc.yml up --build
+#
+# Ships a DEV-ONLY identity provider (devidp: fixed test users alice/alice123,
+# bob/bob123) behind the frontend origin at /auth, so the whole flow runs with
+# zero external dependencies. Everything speaks standard OIDC — for production,
+# drop the devidp service and point OIDC_ISSUER / OIDC_JWK_SET_URI /
+# OIDC_CLIENT_ID at a real provider (Keycloak, Entra ID, ...), routing it under
+# /auth (e.g. Keycloak with KC_HTTP_RELATIVE_PATH=/auth) or any public URL.
+#
+# PUBLIC_ORIGIN must be the origin browsers use (default matches the base
+# compose's :8088); the JWT `iss` claim and the frontend authority derive from it.
+services:
+  devidp:
+    build: ./devidp
+    environment:
+      PORT: "8089"
+      ISSUER: ${PUBLIC_ORIGIN:-http://localhost:8088}/auth
+
+  backend:
+    environment:
+      SPRING_PROFILES_ACTIVE: postgres,oidc
+      OIDC_ISSUER: ${PUBLIC_ORIGIN:-http://localhost:8088}/auth
+      OIDC_JWK_SET_URI: http://devidp:8089/auth/jwks
+      OIDC_CLIENT_ID: warroomlive-web
+
+  collab:
+    environment:
+      OIDC_ISSUER: ${PUBLIC_ORIGIN:-http://localhost:8088}/auth
+      OIDC_JWK_SET_URI: http://devidp:8089/auth/jwks
+
+  frontend:
+    depends_on:
+      - backend
+      - collab
+      - devidp

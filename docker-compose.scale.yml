@@ -1,0 +1,40 @@
+# Opt-in horizontal-scaling overlay: two backend replicas and two collab
+# replicas share rooms/documents through Redis.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml up --build
+#
+# - backend runs the 'redis' profile: room membership lives in a Redis directory
+#   (with node heartbeats + lazy ghost pruning) and signaling fans out across
+#   nodes over Redis pub/sub.
+# - collab syncs Yjs updates/awareness between instances via
+#   @hocuspocus/extension-redis; snapshots still land in Postgres.
+# - nginx round-robins new connections across replicas via docker DNS
+#   (request-time resolution in nginx.conf); each WebSocket stays sticky to the
+#   replica that accepted it.
+# Composes with the oidc/sfu/observability/tls overlays.
+services:
+  redis:
+    image: redis:7-alpine
+
+  backend:
+    deploy:
+      replicas: 2
+    environment:
+      SPRING_PROFILES_ACTIVE: postgres,redis
+      REDIS_HOST: redis
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  collab:
+    deploy:
+      replicas: 2
+    environment:
+      REDIS_HOST: redis
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
