@@ -1,0 +1,13 @@
+# Event-backbone mode. Activate by adding 'kafka' to SPRING_PROFILES_ACTIVE
+# alongside 'postgres' (the outbox table lives in the database), e.g.
+# "postgres,kafka". Business events are written transactionally with their
+# aggregates into outbox_events and shipped to the broker by OutboxPublisher
+# (see docker-compose.events.yml for a Redpanda deployment).
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+warroomlive:
+  events:
+    topic: ${EVENTS_TOPIC:warroom.events}
+    poll-interval-ms: ${EVENTS_POLL_INTERVAL_MS:1000}

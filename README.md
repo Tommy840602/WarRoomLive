@@ -101,6 +101,16 @@ docker compose -f docker-compose.yml -f docker-compose.scale.yml up --build
 - **nginx 輪詢**:`/api`、`/ws`、`/ws/doc` 皆改為請求時 DNS 解析,docker DNS 將新連線輪流導向各副本;WebSocket 連線建立後黏在該副本上。
 - **房間上限為原子判斷**:單機以 per-room `compute` 序列化、叢集以 Redis Lua script(計數 + 條件寫入一步完成),多節點同時加入也不會超額。
 
+## 事件骨幹(選用疊加層):Transactional Outbox + Redpanda
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.events.yml up --build
+```
+
+- 後端加上 `kafka` profile(需搭配 `postgres`):聊天訊息與其 `chat.message.created` 事件**在同一筆交易**寫入(`outbox_events` 表,V3 遷移),`OutboxPublisher` 每秒輪詢未發布列(`FOR UPDATE SKIP LOCKED`,多副本可並行不重工)推送到 Kafka 相容的 Redpanda(主題 `warroom.events`)。
+- 語義為 **at-least-once**:broker 斷線只會累積 backlog(Prometheus 指標 `warroomlive_events_backlog`),恢復後按序補發;消費端須以信封中的 `eventId` 去重。信封含 `eventId` / `eventType` / `aggregateType` / `aggregateId` / `schemaVersion` / `occurredAt` / `payload`。
+- 檢視事件:`docker compose ... exec redpanda rpk topic consume warroom.events --num 5`。
+
 ## 可觀測性(選用疊加層)
 
 ```bash
