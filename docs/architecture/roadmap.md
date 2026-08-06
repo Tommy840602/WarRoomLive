@@ -14,8 +14,8 @@
 
 ## 演進順序(建議)
 
-1. **CRDT 平面強化**:awareness 節流(20–30 Hz)、單一 update 大小限制、文件尺寸上限、Yjs update log + 定期 snapshot compaction(目前僅存最新快照)。
-2. **認證授權**:OIDC(Keycloak/Entra ID)→ WebSocket 與 collab 連線帶短效 token,join/publish 每事件驗證;LiveKit token 簽發服務屬同一步。
+1. ~~**CRDT 平面強化**~~ ✅ 已完成:awareness 節流(~25 Hz)、update 大小上限(512 KB)、文件尺寸上限(5 MB)、每連線訊息速率上限(120/s)、`collab_update` 日誌 + debounce 快照 compaction。
+2. **認證授權** ✅ 部分完成:OIDC Resource Server(`oidc` profile)、collab JWT 驗證、前端 PKCE 登入、`docker-compose.oidc.yml` overlay(devidp 為開發用 IdP,正式環境以 `OIDC_*` env 換成 Keycloak/Entra)。尚餘:token 過期後的 silent renew 與連線 re-auth、join/publish 逐事件授權(目前為連線層)、LiveKit token 簽發(隨 SFU 一起做)。
 3. **SFU 遷移**:房間規模需求超過 ~8 人時導入 LiveKit(自架或雲端),前端以 LiveKit Client SDK 取代 `WebRtcRoom` mesh;屆時移除 `max-room-size` 與前端警告(CLAUDE.md 有標記)。coturn 供 TURN fallback。
 4. **水平擴展 backplane**:`RoomManager` 的房間成員狀態移到 Redis;跨節點事件用 Redis Pub/Sub 起步,業務事件成長後改 Kafka + transactional outbox。
 5. **可觀測性**:OpenTelemetry + Prometheus 指標(WebSocket 連線數、訊息延遲、CRDT update 速率、房間人數),先於任何多節點部署。

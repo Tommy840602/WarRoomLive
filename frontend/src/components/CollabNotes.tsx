@@ -53,6 +53,8 @@ function colorFor(name: string): string {
 interface CollabNotesProps {
   room: string
   userName: string
+  /** OIDC access token when auth is active; verified by the collab service. */
+  token?: string | null
 }
 
 /**
@@ -60,7 +62,7 @@ interface CollabNotesProps {
  * the collab service (Hocuspocus) at /ws/doc. Content merges conflict-free across
  * participants; cursors and names ride the ephemeral awareness channel.
  */
-export function CollabNotes({ room, userName }: CollabNotesProps) {
+export function CollabNotes({ room, userName, token }: CollabNotesProps) {
   const [session, setSession] = useState<{ doc: Y.Doc; provider: HocuspocusProvider } | null>(null)
   const [connected, setConnected] = useState(false)
 
@@ -71,6 +73,7 @@ export function CollabNotes({ room, userName }: CollabNotesProps) {
       url: defaultDocUrl(),
       name: `warroom:${room}`,
       document: doc,
+      token: token ?? undefined,
       onStatus: ({ status }) => setConnected(status === WebSocketStatus.Connected),
     })
     const restoreAwareness = throttleAwareness(provider)
@@ -82,7 +85,7 @@ export function CollabNotes({ room, userName }: CollabNotesProps) {
       setSession(null)
       setConnected(false)
     }
-  }, [room])
+  }, [room, token])
 
   return (
     <section className="notes">

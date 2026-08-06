@@ -31,6 +31,13 @@
             <artifactId>spring-boot-starter-websocket</artifactId>
         </dependency>
 
+        <!-- JWT validation for the 'oidc' profile; the default profile installs a
+             permit-all filter chain so no identity provider is required locally. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+
         <!-- Chat persistence. JPA/DataSource auto-config is excluded by default
              (in-memory repository) and re-enabled under the 'postgres' profile. -->
         <dependency>

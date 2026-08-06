@@ -1,0 +1,17 @@
+# OIDC resource-server mode. Activate by adding 'oidc' to SPRING_PROFILES_ACTIVE
+# (combines with 'postgres', e.g. "postgres,oidc").
+#
+# issuer        — the public issuer string as browsers see it (must equal the JWT
+#                 'iss' claim). Behind the single-origin proxy this is the frontend
+#                 origin + /auth.
+# jwk-set-uri   — where THIS server fetches signing keys; inside docker-compose that
+#                 is the provider's internal address, hence separate from 'issuer'.
+# client-id     — the public (PKCE) client the frontend uses; served to it via
+#                 GET /api/auth/config.
+#
+# Works with any OIDC provider (Keycloak, Entra ID, ...): point the env vars at it.
+warroomlive:
+  auth:
+    issuer: ${OIDC_ISSUER:http://localhost:8088/auth}
+    jwk-set-uri: ${OIDC_JWK_SET_URI:${warroomlive.auth.issuer}/jwks}
+    client-id: ${OIDC_CLIENT_ID:warroomlive-web}

@@ -8,6 +8,7 @@ import { MemberList, type Member } from './components/MemberList'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
 import type { MediaState, PeerInfo, StoredMessage } from './signaling/types'
+import { useAuth } from './auth/AuthGate'
 import './App.css'
 
 type Status = 'idle' | 'connecting' | 'in-room' | 'error'
@@ -26,8 +27,10 @@ interface ChatEntry {
 }
 
 export default function App() {
+  const { token, displayName: authName } = useAuth()
   const [room, setRoom] = useState('war-room')
-  const [name, setName] = useState('')
+  // With OIDC active the identity provider supplies the name; it stays editable.
+  const [name, setName] = useState(authName ?? '')
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState<string | null>(null)
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
@@ -115,7 +118,7 @@ export default function App() {
       cameraStreamRef.current = stream
       setLocalStream(stream)
 
-      const client = new SignalingClient(defaultSignalingUrl())
+      const client = new SignalingClient(defaultSignalingUrl(token))
       await client.connect()
       clientRef.current = client
 
@@ -219,7 +222,7 @@ export default function App() {
       setError(e instanceof Error ? e.message : String(e))
       setStatus('error')
     }
-  }, [room, name, teardown, showReaction])
+  }, [room, name, token, teardown, showReaction])
 
   const leave = useCallback(() => {
     roomRef.current?.leave(room)
@@ -408,7 +411,11 @@ export default function App() {
       </section>
 
       {status === 'in-room' && (
-        <CollabNotes room={room} userName={name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`} />
+        <CollabNotes
+          room={room}
+          userName={name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`}
+          token={token}
+        />
       )}
 
       <FloatingReactions reactions={reactions} />

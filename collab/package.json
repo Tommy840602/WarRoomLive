@@ -10,6 +10,7 @@
   "dependencies": {
     "@hocuspocus/extension-database": "^2.15.2",
     "@hocuspocus/server": "^2.15.2",
+    "jose": "^6.2.8",
     "pg": "^8.13.1",
     "yjs": "^13.6.20"
   }

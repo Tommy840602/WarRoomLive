@@ -16,6 +16,7 @@
 // other participants are unaffected.
 import { Server } from '@hocuspocus/server'
 import { Database } from '@hocuspocus/extension-database'
+import { createRemoteJWKSet, jwtVerify } from 'jose'
 import * as Y from 'yjs'
 import pg from 'pg'
 
@@ -158,7 +159,30 @@ if (pool) {
   )
 }
 
-const server = Server.configure({ port, extensions })
+// OIDC: when an issuer is configured, every connection must present a JWT from it
+// (HocuspocusProvider's `token` option). Unset in local dev → open, matching the
+// backend's profile-gated security. The JWKS is fetched from OIDC_JWK_SET_URI
+// (internal address behind the single-origin proxy) while `iss` must equal the
+// public OIDC_ISSUER string browsers see.
+const oidcIssuer = process.env.OIDC_ISSUER
+const jwks = oidcIssuer
+  ? createRemoteJWKSet(new URL(process.env.OIDC_JWK_SET_URI ?? `${oidcIssuer}/jwks`))
+  : null
+if (oidcIssuer) console.log(`collab service: requiring JWTs issued by ${oidcIssuer}`)
+
+const server = Server.configure({
+  port,
+  extensions,
+  ...(oidcIssuer
+    ? {
+        async onAuthenticate({ token }) {
+          if (!token) throw new Error('missing access token')
+          const { payload } = await jwtVerify(token, jwks, { issuer: oidcIssuer })
+          return { user: payload.preferred_username ?? payload.sub }
+        },
+      }
+    : {}),
+})
 
 server.listen().then(() => {
   console.log(`collab service listening on :${port}`)
