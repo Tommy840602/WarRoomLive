@@ -1,0 +1,14 @@
+# Edge reverse proxy with automatic HTTPS.
+#
+# SITE_ADDRESS controls the certificate behaviour:
+#   - a real domain (e.g. warroom.example.com) → Caddy obtains a Let's Encrypt cert
+#     automatically (ports 80 and 443 must be publicly reachable).
+#   - localhost (default) → Caddy serves its internal, locally-trusted CA cert,
+#     which is ideal for testing TLS locally.
+#
+# To receive certificate-expiry notices in production, add a global block:
+#   { email you@example.com }
+{$SITE_ADDRESS:localhost} {
+	# reverse_proxy transparently handles WebSocket upgrades, so /ws works too.
+	reverse_proxy frontend:80
+}
