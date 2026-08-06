@@ -1,0 +1,29 @@
+# Opt-in TURN overlay: a coturn relay for mesh-mode calls where direct
+# peer-to-peer UDP is blocked (strict NATs / corporate networks).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.turn.yml up --build
+#
+# The backend advertises the relay in /api/media/config's iceServers; browsers
+# fall back to it automatically when host/srflx candidates fail. Set
+# TURN_PUBLIC_HOST to the address browsers can reach (default localhost for
+# local runs). Long-term credentials here are dev defaults — change them (or
+# switch coturn to --use-auth-secret) before exposing the relay publicly.
+# In SFU mode LiveKit manages its own ICE; this overlay targets the mesh path.
+services:
+  coturn:
+    image: coturn/coturn:4
+    command: >-
+      -n --log-file=stdout --fingerprint --lt-cred-mech
+      --realm=warroomlive --user=warroom:warroomsecret
+      --listening-port=3478 --min-port=49160 --max-port=49200
+      --no-tls --no-dtls
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "49160-49200:49160-49200/udp"
+
+  backend:
+    environment:
+      TURN_URLS: turn:${TURN_PUBLIC_HOST:-localhost}:3478
+      TURN_USERNAME: warroom
+      TURN_PASSWORD: warroomsecret

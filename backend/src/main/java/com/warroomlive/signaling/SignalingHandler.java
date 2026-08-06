@@ -142,24 +142,20 @@ public class SignalingHandler extends TextWebSocketHandler {
             return;
         }
 
-        // Reject if the room is at capacity cluster-wide — unless this peer is
-        // already a member (reconnect). On the Redis backplane this read-then-
-        // register pair is not atomic; simultaneous joins on different nodes can
-        // briefly overshoot the cap (see RedisBackplane).
+        // Read the (ghost-pruned) membership for the peers reply, then let the
+        // backplane make the capacity decision atomically — reconnects of an
+        // existing member always pass.
         List<PeerInfo> clusterPeers = backplane.peersIn(msg.room());
-        List<String> current = clusterPeers.stream().map(PeerInfo::id).toList();
-        if (current.size() >= maxRoomSize && !current.contains(msg.from())) {
-            log.info("Rejected {} from full room {} ({}/{})",
-                    msg.from(), msg.room(), current.size(), maxRoomSize);
+        String name = displayName(msg);
+        if (!backplane.tryRegister(msg.room(), msg.from(), name, maxRoomSize)) {
+            log.info("Rejected {} from full room {} (cap {})", msg.from(), msg.room(), maxRoomSize);
             send(session, new SignalMessage(
                     SignalMessage.TYPE_ROOM_FULL, msg.room(), null, msg.from(),
                     mapper.valueToTree(maxRoomSize)));
             return;
         }
 
-        String name = displayName(msg);
         rooms.join(msg.room(), msg.from(), name, session);
-        backplane.register(msg.room(), msg.from(), name);
         List<PeerInfo> existingPeers = clusterPeers.stream()
                 .filter(info -> !info.id().equals(msg.from()))
                 .toList();

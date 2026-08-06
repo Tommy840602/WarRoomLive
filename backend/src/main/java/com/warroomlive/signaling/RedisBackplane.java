@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -34,10 +35,10 @@ import java.util.UUID;
  *       already delivered locally) and deliver the rest to matching local sessions.
  * </ul>
  *
- * <p>Known trade-off: the room-capacity check in the handler reads membership and
- * registers in two steps, so simultaneous joins on different nodes can briefly
- * overshoot the cap by a peer or two. Tightening that needs a Lua script; not
- * worth it at the current cap sizes.
+ * <p>The room-capacity decision runs as a Lua script (count + conditional HSET in
+ * one atomic step), so simultaneous joins on different nodes cannot overshoot the
+ * cap. Ghosts are pruned before the script runs; pruning only ever shrinks the
+ * count, so racing prunes stay safe.
  */
 @Component
 @Profile("redis")
@@ -116,12 +117,30 @@ public class RedisBackplane implements Backplane {
         return peers;
     }
 
+    /**
+     * KEYS[1]=room hash, KEYS[2]=rooms set; ARGV: peerId, entryJson, max, room.
+     * Returns 1 when registered, 0 when the room is full.
+     */
+    private static final DefaultRedisScript<Long> TRY_REGISTER = new DefaultRedisScript<>("""
+            if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 0
+               and redis.call('HLEN', KEYS[1]) >= tonumber(ARGV[3]) then
+              return 0
+            end
+            redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+            redis.call('SADD', KEYS[2], ARGV[4])
+            return 1
+            """, Long.class);
+
     @Override
-    public void register(String room, String peerId, String name) {
+    public boolean tryRegister(String room, String peerId, String name, int maxRoomSize) {
         try {
-            redis.opsForHash().put(roomKey(room), peerId,
-                    mapper.writeValueAsString(new MemberEntry(name, nodeId)));
-            redis.opsForSet().add(ROOMS_KEY, room);
+            Long result = redis.execute(TRY_REGISTER,
+                    List.of(roomKey(room), ROOMS_KEY),
+                    peerId,
+                    mapper.writeValueAsString(new MemberEntry(name, nodeId)),
+                    String.valueOf(maxRoomSize),
+                    room);
+            return Long.valueOf(1L).equals(result);
         } catch (Exception e) {
             throw new IllegalStateException("failed to register peer in Redis", e);
         }

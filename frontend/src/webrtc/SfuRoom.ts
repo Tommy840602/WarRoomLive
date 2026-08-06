@@ -104,6 +104,8 @@ export class SfuRoom implements MediaRoom {
 export interface MediaConfig {
   mode: 'sfu' | 'mesh'
   livekitUrl: string
+  /** STUN/TURN servers for mesh-mode RTCPeerConnections (TURN when configured). */
+  iceServers?: RTCIceServer[]
 }
 
 const authHeaders = (token?: string | null): HeadersInit =>

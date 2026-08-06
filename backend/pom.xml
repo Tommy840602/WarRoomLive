@@ -69,6 +69,18 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Schema migrations (postgres profile). Auto-config backs off in the
+             default profile because no DataSource exists there. -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

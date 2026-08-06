@@ -10,5 +10,11 @@ spring:
     password: ${DB_PASSWORD:warroomlive}
   jpa:
     hibernate:
-      ddl-auto: update
+      # Flyway owns the schema (db/migration); Hibernate only checks it matches.
+      ddl-auto: validate
     open-in-view: false
+  flyway:
+    # Existing databases predate Flyway (Hibernate-created tables, no history
+    # table): baseline them at 0 so V1+ apply/verify cleanly.
+    baseline-on-migrate: true
+    baseline-version: 0
