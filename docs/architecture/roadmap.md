@@ -50,7 +50,7 @@
 **F. 需要真實環境才能推進(部署層,非程式碼缺口)**
 真實 IdP(Keycloak/Entra)對接演練、Slack/PagerDuty 告警接收端、TURN/TLS 443 真憑證、跨區域備份複寫與 KMS、目標環境的藍圖級工作負載(20k 連線)。
 
-**D. 等規模需求出現再做**
+**G. 等規模需求出現再做**
 Redis Cluster(資料分片;可用性已由 Sentinel 覆蓋)、OpenSearch 取代 Postgres FTS、部門/專案層級 ACL(需組織目錄整合)。
 
 ## 原則(照藍圖)
