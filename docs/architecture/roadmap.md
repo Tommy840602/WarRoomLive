@@ -7,7 +7,7 @@
 | 平面 | 藍圖建議 | 目前實作 | 差距 |
 |---|---|---|---|
 | 媒體 | LiveKit SFU + coturn | 模式切換:預設 mesh(≤8),SFU 疊加層走 LiveKit(上限 50);simulcast + adaptiveStream + dynacast;coturn TURN fallback;Egress 錄影 → MinIO;**每對等連線品質量測與弱網降級、ICE 重啟** | TURN/TLS 443 需真實憑證(部署層);錄影無播放介面 |
-| 業務事件 | Spring WebSocket(STOMP)+ Redis/Kafka backplane | 自訂 JSON envelope(`SignalMessage`);`Backplane` 抽象(單機 / Redis pub-sub + Sentinel HA);transactional outbox → Redpanda + schema registry;**斷線自動重連與重新加入** | **無速率/大小限制**(見下方演進順序 9) |
+| 業務事件 | Spring WebSocket(STOMP)+ Redis/Kafka backplane | 自訂 JSON envelope(`SignalMessage`);`Backplane` 抽象(單機 / Redis pub-sub + Sentinel HA);transactional outbox → Redpanda + schema registry;**斷線自動重連與重新加入**;**每連線速率/訊框/聊天長度上限** | — |
 | 共同編輯 | TipTap/ProseMirror + Yjs + Hocuspocus + Postgres | ✅ 同組合:`collab/` 服務;update log + debounce 快照 compaction;訊息/文件/速率三重上限;多實例經 Redis 同步 | — |
 | 持久化 | PostgreSQL 為 source of truth | 聊天、筆記快照、outbox、稽核與搜尋讀模型、會議領域皆入 Postgres;Flyway 管 schema(V1–V5);WAL 歸檔 + PITR + 加密物件儲存歸檔 | 跨區域複寫、KMS(部署層) |
 | 前端 | Vue 3 生態系 + Konva 白板 | React 18(既有投資,不重寫)+ Konva 白板 ✅ | 刻意偏離框架 |
@@ -30,10 +30,9 @@
 
 ## 後續(依價值排序)
 
-**A. 信令平面的濫用防護(唯一還沒做的核心工程項)**
-CRDT 平面有三重上限(單筆 512 KB、文件 5 MB、每連線 120/s),**信令平面一個都沒有**。單一客戶端可以灌爆 socket,或送出任意大小的聊天訊息直接寫進 Postgres。需要:每連線 token bucket、訊息與聊天內容長度上限、超限的處置(丟棄或斷線)與對應指標。這個不對稱是目前最明確的缺口。
+**A. 信令平面的濫用防護** ✅ 已完成:每連線 token bucket(`RateLimiter`,預設 60/s + 2 倍突發)、容器層訊框上限(64 KB)、聊天長度上限(4000 字,寫入資料庫前檢查)。處置依意圖分流——超速丟棄、過長回錯、超大訊框由容器 1009 關閉;每種拒絕皆有指標。以 `RateLimiterTest`(注入時鐘)、`SignalingLimitsIntegrationTest`、`tests/e2e/run.sh limits` 驗證,並重跑 k6 壓測確認正常流量未被誤傷(checks 100%、chat RTT p95 6ms)。
 
-**B. 錄影播放介面**
+**B. 錄影播放介面(下一項)**
 錄好的 MP4 進了 MinIO,但應用內沒有列出或播放的地方——目前只能到物件儲存翻檔案。需要:會議錄影清單(以 `meeting.recording.completed` 事件為來源)與簽名 URL 播放。
 
 **C. 需要真實環境才能推進(部署層,非程式碼缺口)**

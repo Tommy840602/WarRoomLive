@@ -50,6 +50,8 @@ public class SignalingHandler extends TextWebSocketHandler {
     private final ObjectProvider<MeetingTracker> meetings;
     private final int maxRoomSize;
     private final int historyLimit;
+    private final int maxChatLength;
+    private final RateLimiter rateLimiter;
 
     /** Wraps raw sessions so concurrent sends from multiple peers are serialized safely. */
     private final Map<String, ConcurrentWebSocketSessionDecorator> safeSessions = new ConcurrentHashMap<>();
@@ -67,7 +69,9 @@ public class SignalingHandler extends TextWebSocketHandler {
             ObjectProvider<MeetingTracker> meetings,
             MeterRegistry metrics,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-room-size:8}") int maxRoomSize,
-            @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.history-limit:100}") int historyLimit) {
+            @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.history-limit:100}") int historyLimit,
+            @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-messages-per-second:60}") int maxMessagesPerSecond,
+            @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.max-length:4000}") int maxChatLength) {
         this.rooms = rooms;
         this.backplane = backplane;
         this.mapper = mapper;
@@ -77,6 +81,8 @@ public class SignalingHandler extends TextWebSocketHandler {
         this.metrics = metrics;
         this.maxRoomSize = maxRoomSize;
         this.historyLimit = historyLimit;
+        this.maxChatLength = maxChatLength;
+        this.rateLimiter = new RateLimiter(maxMessagesPerSecond);
         metrics.gauge("warroomlive.signaling.connections.active", connectionsActive);
         this.processingTimer = Timer.builder("warroomlive.signaling.message.processing")
                 .description("Time spent handling one inbound signaling message")
@@ -127,6 +133,15 @@ public class SignalingHandler extends TextWebSocketHandler {
             } catch (IOException e) {
                 log.warn("Failed to close expired session {}: {}", session.getId(), e.getMessage());
             }
+            return;
+        }
+        // Rate limit before parsing: a flood costs as little as possible, and the
+        // message is dropped rather than closing the connection — a burst is far
+        // more often a bug or a bad network than an attack, and disconnecting the
+        // whole session would take chat, presence and negotiation down with it.
+        // Sustained abuse simply keeps losing messages, and shows up in metrics.
+        if (!rateLimiter.tryConsume(session.getId())) {
+            countIn("rate-limited");
             return;
         }
         SignalMessage msg;
@@ -260,9 +275,20 @@ public class SignalingHandler extends TextWebSocketHandler {
             sendError(session, msg.room(), "chat requires 'room', 'from' and 'payload'");
             return;
         }
+        // A chat message is the one signaling payload that lands in durable
+        // storage, so it is bounded here rather than being allowed to define its
+        // own size. Rejecting tells the sender their message did not go through;
+        // silently truncating would be worse, because they would believe it did.
+        String text = msg.payload().asText();
+        if (text.length() > maxChatLength) {
+            countIn("chat-too-long");
+            sendError(session, msg.room(),
+                    "chat message exceeds " + maxChatLength + " characters");
+            return;
+        }
         String name = rooms.nameOf(msg.room(), msg.from()).orElse(msg.from());
         chat.append(msg.room(), new StoredMessage(
-                msg.from(), name, msg.payload().asText(), System.currentTimeMillis()));
+                msg.from(), name, text, System.currentTimeMillis()));
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, msg));
         backplane.publishToRoom(msg.room(), msg.from(), msg);
     }
@@ -376,6 +402,7 @@ public class SignalingHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         safeSessions.remove(session.getId());
+        rateLimiter.release(session.getId());
         connectionsActive.decrementAndGet();
         rooms.remove(session).ifPresent(this::broadcastPeerLeft);
         log.debug("WebSocket closed: {} ({})", session.getId(), status);
