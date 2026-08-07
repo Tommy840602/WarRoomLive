@@ -118,6 +118,18 @@ export function signalClient(id, name = id, { token } = {}) {
 
   const send = (msg) => ws.send(JSON.stringify(msg))
   const seen = (type, pred = () => true) => queue.some((m) => m.type === type && pred(m))
+  /** How many messages of a type are sitting unread — for counting what arrived. */
+  const inboxSize = (type) => queue.filter((m) => m.type === type).length
+  /** Awaits a message matching a predicate, skipping ones that do not. */
+  const until = async (type, pred, ms = 8000) => {
+    const deadline = Date.now() + ms
+    for (;;) {
+      const i = queue.findIndex((m) => m.type === type && pred(m))
+      if (i >= 0) return queue.splice(i, 1)[0]
+      if (Date.now() > deadline) throw new Error(`${id}: timeout waiting for a matching '${type}'`)
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }
 
   /** join + await the `peers` reply, the handshake every suite starts from. */
   const join = async (room) => {
@@ -126,7 +138,10 @@ export function signalClient(id, name = id, { token } = {}) {
     return next('peers')
   }
 
-  return { id, name, ws, opened, next, send, join, seen, awaitClose, close: () => ws.close() }
+  return {
+    id, name, ws, opened, next, send, join, seen, inboxSize, until, awaitClose,
+    close: () => ws.close(),
+  }
 }
 
 // --- collab (CRDT) plane --------------------------------------------------

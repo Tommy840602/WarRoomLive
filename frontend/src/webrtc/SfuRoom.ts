@@ -1,7 +1,9 @@
 import {
+  ConnectionQuality,
   Room,
   RoomEvent,
   Track,
+  type Participant,
   type RemoteParticipant,
   type RemoteTrack,
 } from 'livekit-client'
@@ -13,6 +15,8 @@ export interface MediaRoom {
   join(room: string, displayName: string): void
   leave(room: string): void
   replaceVideoTrack(track: MediaStreamTrack): Promise<void>
+  /** The signaling socket dropped and recovered; re-establish media if needed. */
+  handleReconnect(): void
 }
 
 /**
@@ -62,6 +66,11 @@ export class SfuRoom implements MediaRoom {
           this.remoteStreams.delete(participant.identity)
           this.events.onPeerLeft(participant.identity)
         })
+        // The SFU already judges each participant's link; map its verdict onto
+        // the same shape the mesh path computes, so the UI has one language.
+        .on(RoomEvent.ConnectionQualityChanged, (quality, participant) =>
+          this.onQualityChanged(quality, participant),
+        )
 
       await this.room.connect(this.livekit.url, this.livekit.token)
 
@@ -77,6 +86,21 @@ export class SfuRoom implements MediaRoom {
     } catch (e) {
       this.events.onError?.(`SFU 連線失敗:${e instanceof Error ? e.message : String(e)}`)
     }
+  }
+
+  private onQualityChanged(quality: ConnectionQuality, participant: Participant): void {
+    const level = quality === ConnectionQuality.Excellent || quality === ConnectionQuality.Good
+      ? 'good'
+      : quality === ConnectionQuality.Poor
+        ? 'poor'
+        : 'fair'
+    // No degradation to apply here: adaptiveStream and dynacast already adjust
+    // what the SFU sends, which is the whole point of publishing once.
+    this.events.onQuality?.(participant.identity, {
+      level,
+      degraded: false,
+      lastSample: { lossRatio: 0 },
+    })
   }
 
   private onTrackSubscribed(track: RemoteTrack, participant: RemoteParticipant): void {
@@ -99,6 +123,13 @@ export class SfuRoom implements MediaRoom {
       await this.room.localParticipant.publishTrack(track, { source: Track.Source.Camera })
     }
   }
+
+  /**
+   * Nothing to do: media here rides LiveKit's own connection, which has its own
+   * reconnection and is unaffected by the signaling socket dropping. Tearing
+   * down tracks on a signaling blip would cause a visible outage for no reason.
+   */
+  handleReconnect(): void {}
 
   leave(roomName: string): void {
     this.signaling.send({ type: 'leave', room: roomName, from: this.selfId })

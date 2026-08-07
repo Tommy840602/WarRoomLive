@@ -23,9 +23,20 @@ warroomlive:
     # Hard cap on participants per room. The client uses a full WebRTC mesh, whose
     # upload bandwidth scales with peer count, so keep this small until an SFU exists.
     max-room-size: 8
+    # Abuse limits for the signaling plane, mirroring the ones the collab service
+    # has always had. Rate is per connection and tolerates a burst of twice this
+    # (a join followed by a flurry of ICE candidates); messages beyond it are
+    # dropped, not fatal to the connection. Frames larger than the cap are
+    # refused by the container — an SDP offer, the largest legitimate message,
+    # is a few kilobytes.
+    max-messages-per-second: 60
+    max-frame-bytes: 65536
   chat:
     # How many recent messages to retain per room (in-memory) and replay on join.
     history-limit: 100
+    # Chat is the one signaling payload that reaches durable storage, so its
+    # length is bounded here; over-long messages are rejected, never truncated.
+    max-length: 4000
   # Media plane. Unset (default) = full-mesh WebRTC in the browser. Setting all
   # three (see docker-compose.sfu.yml) switches /api/media/config to SFU mode and
   # enables the LiveKit token endpoint.

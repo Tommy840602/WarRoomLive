@@ -27,6 +27,8 @@ changing it.
 | `room-acl` | any stack | Host assignment and handover, host-only lock and kick, refusal of non-host and spoofed-identity senders, the kicked peer's 4403 close. |
 | `crdt` | any stack | Convergence through the collab service, conflict-free merge of concurrent/offline edits, full state for a late joiner. |
 | `capacity` | any stack | 12 simultaneous joins against a cap-8 room split exactly 8/4 — the atomic path (per-room compute locally, Lua on Redis). |
+| `limits` | any stack | The signaling plane's abuse limits: an over-long chat is refused (not truncated), an oversized frame closes only that connection, and a flooding sender is bounded by its token bucket while the room stays usable. |
+| `reconnect` | any stack | The server contract behind client reconnection: an abrupt drop is announced, a re-join restores membership exactly once, a close arriving late for a replaced socket does not evict the live one, and replayed state reaches the room. |
 | `oidc` | oidc overlay | Both WS planes refuse anonymous and forged credentials, and both work with a real token. |
 | `token-lifecycle` | oidc overlay, short TTL | Refresh-token rotation and single use; a connection whose token expired is closed with 4401 on its next message. |
 | `events` | events overlay | Activity → outbox → Redpanda → indexer → read models → search API, plus idempotent consumption of a replayed envelope. |

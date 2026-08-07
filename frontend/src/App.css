@@ -72,6 +72,14 @@
   font-size: 0.9rem;
 }
 
+.app__reconnecting {
+  color: #93c5fd;
+  background: #14202a;
+  padding: 0.6rem 0.9rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 1fr 320px;
@@ -583,4 +591,21 @@
 .chat__form button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.members__signal {
+  font-family: monospace;
+  letter-spacing: -1px;
+}
+
+.members__signal--good {
+  color: #4ade80;
+}
+
+.members__signal--fair {
+  color: #fbbf24;
+}
+
+.members__signal--poor {
+  color: #f87171;
 }

@@ -1,5 +1,9 @@
 import { useCallback, useRef, useState } from 'react'
-import { SignalingClient, defaultSignalingUrl } from './signaling/SignalingClient'
+import {
+  SignalingClient,
+  defaultSignalingUrl,
+  type ConnectionState,
+} from './signaling/SignalingClient'
 import { WebRtcRoom } from './webrtc/WebRtcRoom'
 import {
   SfuRoom,
@@ -15,6 +19,7 @@ import { MemberList, type Member } from './components/MemberList'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
 import type { MediaState, PeerInfo, RoomStateInfo, StoredMessage } from './signaling/types'
+import type { PeerQuality } from './webrtc/quality'
 import { useAuth } from './auth/AuthGate'
 import './App.css'
 
@@ -54,6 +59,8 @@ export default function App() {
   const [mediaMode, setMediaMode] = useState<'mesh' | 'sfu'>('mesh')
   const [recordingId, setRecordingId] = useState<string | null>(null)
   const [roomState, setRoomState] = useState<RoomStateInfo>({ host: '', locked: false })
+  const [connection, setConnection] = useState<ConnectionState>('closed')
+  const [peerQuality, setPeerQuality] = useState<Map<string, PeerQuality>>(new Map())
 
   const clientRef = useRef<SignalingClient | null>(null)
   const roomRef = useRef<MediaRoom | null>(null)
@@ -64,6 +71,13 @@ export default function App() {
   const mediaStateRef = useRef<MediaState>({ audio: true, video: true })
   const handRaisedRef = useRef(false)
   const recordingIdRef = useRef<string | null>(null)
+  // Read at reconnect time rather than captured at join time: a silent renew may
+  // have replaced the token since, and a stale one is refused at the handshake.
+  const tokenRef = useRef(token)
+  tokenRef.current = token
+  // The room/name in effect for the session, so a reconnect can re-join without
+  // depending on the inputs, which the user may have edited meanwhile.
+  const joinedAsRef = useRef<{ room: string; displayName: string } | null>(null)
 
   /** Resolves a peer id to its display name, falling back to a short id. */
   const nameOf = (peerId: string) => names.get(peerId) ?? peerId.slice(0, 8)
@@ -93,6 +107,8 @@ export default function App() {
       audioOff: peerStates.get(id)?.audio === false,
       videoOff: peerStates.get(id)?.video === false,
       handRaised: raisedHands.has(id),
+      quality: peerQuality.get(id)?.level,
+      degraded: peerQuality.get(id)?.degraded,
     })),
   ]
 
@@ -117,6 +133,7 @@ export default function App() {
     setRemoteStreams(new Map())
     setNames(new Map())
     setPeerStates(new Map())
+    setPeerQuality(new Map())
     setMessages([])
     setScreenSharing(false)
     setAudioEnabled(true)
@@ -125,9 +142,44 @@ export default function App() {
     setRaisedHands(new Set())
     setReactions([])
     setRoomState({ host: '', locked: false })
+    setConnection('closed')
+    joinedAsRef.current = null
     mediaStateRef.current = { audio: true, video: true }
     handRaisedRef.current = false
     setStatus('idle')
+  }, [])
+
+  /**
+   * Recovers the room after the signaling socket came back. The server dropped
+   * our membership when the old socket died — everyone else was told we left —
+   * so this re-announces us and replays the state the others can no longer see.
+   */
+  const rejoin = useCallback((client: SignalingClient) => {
+    const joined = joinedAsRef.current
+    if (!joined) return
+    // Media first: stale peer connections must be gone before the `peers` reply
+    // arrives and starts building new ones.
+    roomRef.current?.handleReconnect()
+    setPeerStates(new Map())
+    setRaisedHands(new Set())
+    setPeerQuality(new Map())
+
+    client.send({
+      type: 'join',
+      room: joined.room,
+      from: selfIdRef.current,
+      payload: joined.displayName,
+    })
+    // Flags live only in other clients' memory, so they have to be re-sent.
+    client.send({
+      type: 'state',
+      room: joined.room,
+      from: selfIdRef.current,
+      payload: mediaStateRef.current,
+    })
+    if (handRaisedRef.current) {
+      client.send({ type: 'hand', room: joined.room, from: selfIdRef.current, payload: true })
+    }
   }, [])
 
   const join = useCallback(async () => {
@@ -138,18 +190,18 @@ export default function App() {
       cameraStreamRef.current = stream
       setLocalStream(stream)
 
-      const client = new SignalingClient(defaultSignalingUrl(token))
+      const client = new SignalingClient(() => defaultSignalingUrl(tokenRef.current), {
+        onStateChange: setConnection,
+        onReconnected: () => rejoin(client),
+      })
       await client.connect()
       clientRef.current = client
 
-      // Track peer display names from room membership events. Registered before
-      // join() so the initial `peers` reply is not missed.
+      // `peers` is the room's full membership, and it arrives again after every
+      // reconnect — so it replaces the map rather than merging into it, or
+      // members who left while we were away would linger forever.
       client.on('peers', (msg) =>
-        setNames((prev) => {
-          const next = new Map(prev)
-          ;((msg.payload as PeerInfo[]) ?? []).forEach((p) => next.set(p.id, p.name))
-          return next
-        }),
+        setNames(new Map(((msg.payload as PeerInfo[]) ?? []).map((p) => [p.id, p.name]))),
       )
       client.on('peer-joined', (msg) => {
         if (!msg.from) return
@@ -174,6 +226,11 @@ export default function App() {
         })
         setRaisedHands((prev) => {
           const next = new Set(prev)
+          next.delete(msg.from!)
+          return next
+        })
+        setPeerQuality((prev) => {
+          const next = new Map(prev)
           next.delete(msg.from!)
           return next
         })
@@ -243,9 +300,12 @@ export default function App() {
             return next
           }),
         onError: (reason: string) => setError(reason),
+        onQuality: (peerId: string, quality: PeerQuality) =>
+          setPeerQuality((prev) => new Map(prev).set(peerId, quality)),
       }
 
       const displayName = name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`
+      joinedAsRef.current = { room, displayName }
 
       // The backend decides the media transport: SFU (LiveKit) when configured,
       // else the built-in full mesh. Signaling is identical in both modes.
@@ -470,6 +530,12 @@ export default function App() {
 
       {error && <p className="app__error">⚠️ {error}</p>}
 
+      {status === 'in-room' && connection === 'reconnecting' && (
+        <p className="app__reconnecting">
+          🔌 與伺服器的連線中斷,正在自動重新連線…(共享筆記與白板不受影響)
+        </p>
+      )}
+
       {status === 'in-room' && mediaMode === 'mesh' && members.length >= ROOM_WARN_THRESHOLD && (
         <p className="app__warning">
           ⚠️ 房間目前 {members.length} 人。此版本採 WebRTC full mesh,人數偏多時上行頻寬與畫面可能開始卡頓(上限 8 人)。
@@ -521,7 +587,7 @@ export default function App() {
               mine: m.mine,
             }))}
             onSend={sendChat}
-            disabled={status !== 'in-room'}
+            disabled={status !== 'in-room' || connection !== 'open'}
           />
         </div>
       </section>

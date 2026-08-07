@@ -2,6 +2,7 @@ package com.warroomlive.config;
 
 import com.warroomlive.signaling.SignalingHandler;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
@@ -14,6 +15,7 @@ import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 import org.springframework.web.socket.server.HandshakeInterceptor;
+import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
 
 import java.util.Map;
 
@@ -32,12 +34,31 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
     private final SignalingHandler signalingHandler;
     private final String[] allowedOrigins;
+    private final int maxFrameBytes;
 
     public WebSocketConfig(
             SignalingHandler signalingHandler,
-            @Value("${warroomlive.signaling.allowed-origins:*}") String allowedOrigins) {
+            @Value("${warroomlive.signaling.allowed-origins:*}") String allowedOrigins,
+            @Value("${warroomlive.signaling.max-frame-bytes:65536}") int maxFrameBytes) {
         this.signalingHandler = signalingHandler;
         this.allowedOrigins = allowedOrigins.split("\\s*,\\s*");
+        this.maxFrameBytes = maxFrameBytes;
+    }
+
+    /**
+     * Caps inbound frames at the container, before anything is buffered or
+     * parsed — the cheapest place to refuse a payload that has no business
+     * being this large. Signaling messages are SDP, ICE candidates and chat;
+     * the biggest legitimate one (an SDP offer) is a few kilobytes, so 64 KB is
+     * generous. The CRDT plane sets its own, much larger limit, since document
+     * updates are a different shape of traffic entirely.
+     */
+    @Bean
+    ServletServerContainerFactoryBean createWebSocketContainer() {
+        ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
+        container.setMaxTextMessageBufferSize(maxFrameBytes);
+        container.setMaxBinaryMessageBufferSize(maxFrameBytes);
+        return container;
     }
 
     @Override
