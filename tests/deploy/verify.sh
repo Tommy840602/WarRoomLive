@@ -74,10 +74,17 @@ fi
 # The quiet one. If the edge does not pass Upgrade through — an nginx missing
 # its $connection_upgrade map, most often — every page loads perfectly and no
 # room ever connects.
+#
+# --http1.1 is not optional. Over TLS curl negotiates HTTP/2, where `Connection`
+# and `Upgrade` are forbidden header fields (RFC 9113 §8.2.2), so the handshake
+# arrives mangled and the backend answers 400 — from a perfectly good edge. An
+# earlier version of this check reported exactly that, which is worse than not
+# checking: it tells an operator to go and rewrite a config that works. Browsers
+# open `wss://` over HTTP/1.1 for the same reason, so this is also what they do.
 check_upgrade() {
   path=$1
   label=$2
-  code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
+  code=$(curl -sS --max-time 15 --http1.1 -o /dev/null -w '%{http_code}' \
     -H 'Connection: Upgrade' \
     -H 'Upgrade: websocket' \
     -H 'Sec-WebSocket-Version: 13' \
