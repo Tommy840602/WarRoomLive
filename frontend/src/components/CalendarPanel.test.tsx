@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { CalendarPanel, formatRange, groupByDay } from './CalendarPanel'
+import { CalendarPanel, formatDay, formatRange, groupByDay } from './CalendarPanel'
 import type { CalendarEvent } from '../signaling/types'
 
 const event = (id: number, startsAt: string, endsAt?: string): CalendarEvent => ({
@@ -14,7 +14,10 @@ const event = (id: number, startsAt: string, endsAt?: string): CalendarEvent => 
   createdAt: '2026-08-01T10:00:00Z',
 })
 
+const inHours = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString()
 const noop = () => Promise.resolve()
+const type = (value: string) =>
+  fireEvent.change(screen.getByLabelText('新增行事曆事項'), { target: { value } })
 
 describe('CalendarPanel', () => {
   it('says so when there is nothing coming', () => {
@@ -22,40 +25,41 @@ describe('CalendarPanel', () => {
     expect(screen.getByText(/接下來沒有安排/)).toBeTruthy()
   })
 
-  it('will not submit without both a title and a start', async () => {
-    // An entry with no time cannot be placed on a calendar at all.
+  it('captures an entry from one line', async () => {
     const onAdd = vi.fn().mockResolvedValue(undefined)
     render(<CalendarPanel events={[]} onAdd={onAdd} onDelete={noop} />)
 
-    fireEvent.change(screen.getByLabelText('行事曆事項'), { target: { value: '週會' } })
-    await act(async () => screen.getByRole('button', { name: '新增' }).click())
-    expect(onAdd).not.toHaveBeenCalled()
+    type('週會 明天14:00')
+    await act(async () => screen.getByRole('button', { name: '加入' }).click())
 
-    fireEvent.change(screen.getByLabelText('開始時間'), { target: { value: '2026-08-09T09:00' } })
-    await act(async () => screen.getByRole('button', { name: '新增' }).click())
-    expect(onAdd).toHaveBeenCalledTimes(1)
+    const [title, startsAt, endsAt] = onAdd.mock.calls[0]
+    expect(title).toBe('週會')
+    expect(new Date(startsAt).getHours()).toBe(14)
+    // No end was named; empty is what "no end" has to look like, not an
+    // invalid date the server would refuse.
+    expect(endsAt).toBe('')
   })
 
-  it('sends instants, not the raw wall-clock input', async () => {
+  it('asks for a time instead of silently refusing to submit', async () => {
+    // An entry with no time cannot be placed on a calendar at all, so the
+    // disabled button needs to say why.
     const onAdd = vi.fn().mockResolvedValue(undefined)
     render(<CalendarPanel events={[]} onAdd={onAdd} onDelete={noop} />)
 
-    fireEvent.change(screen.getByLabelText('行事曆事項'), { target: { value: '週會' } })
-    fireEvent.change(screen.getByLabelText('開始時間'), { target: { value: '2026-08-09T09:00' } })
-    await act(async () => screen.getByRole('button', { name: '新增' }).click())
+    type('週會')
+    await waitFor(() => expect(screen.getByText('還需要時間')).toBeTruthy())
+    await act(async () => screen.getByRole('button', { name: '加入' }).click())
+    expect(onAdd).not.toHaveBeenCalled()
+  })
 
-    const [, startsAt, endsAt] = onAdd.mock.calls[0]
-    expect(startsAt.endsWith('Z')).toBe(true)
-    // No end was given, and an empty string is what "no end" has to look like —
-    // not an invalid date the server would refuse.
-    expect(endsAt).toBe('')
+  it('leads each row with how far off it is', () => {
+    render(<CalendarPanel events={[event(1, inHours(3))]} onAdd={noop} onDelete={noop} />)
+    expect(screen.getByText(/3 小時後/)).toBeTruthy()
   })
 
   it('does not delete on the first press', async () => {
     const onDelete = vi.fn().mockResolvedValue(undefined)
-    render(
-      <CalendarPanel events={[event(1, '2026-08-09T09:00:00Z')]} onAdd={noop} onDelete={onDelete} />,
-    )
+    render(<CalendarPanel events={[event(1, inHours(3))]} onAdd={noop} onDelete={onDelete} />)
 
     await act(async () => screen.getByRole('button', { name: /刪除/ }).click())
     expect(onDelete).not.toHaveBeenCalled()
@@ -66,9 +70,7 @@ describe('CalendarPanel', () => {
 
   it('reports a refused deletion', async () => {
     const onDelete = vi.fn().mockRejectedValue(new Error('只有主持人可以刪除'))
-    render(
-      <CalendarPanel events={[event(1, '2026-08-09T09:00:00Z')]} onAdd={noop} onDelete={onDelete} />,
-    )
+    render(<CalendarPanel events={[event(1, inHours(3))]} onAdd={noop} onDelete={onDelete} />)
 
     await act(async () => screen.getByRole('button', { name: /刪除/ }).click())
     await act(async () => screen.getByRole('button', { name: /刪除/ }).click())
@@ -78,8 +80,6 @@ describe('CalendarPanel', () => {
 
 describe('groupByDay', () => {
   it('keeps the server ordering rather than re-sorting', () => {
-    // The server reads the calendar forwards; re-sorting here risks disagreeing
-    // with it, and the panel would then show a different "next" than the API.
     const events = [
       event(1, '2026-08-09T09:00:00Z'),
       event(2, '2026-08-09T14:00:00Z'),
@@ -96,19 +96,34 @@ describe('groupByDay', () => {
   })
 })
 
+describe('formatDay', () => {
+  const now = new Date(2026, 7, 5, 12, 0)
+
+  it('names today and tomorrow, because that is what people call them', () => {
+    expect(formatDay(new Date(2026, 7, 5, 18, 0).toISOString(), now)).toBe('今天')
+    expect(formatDay(new Date(2026, 7, 6, 9, 0).toISOString(), now)).toBe('明天')
+  })
+
+  it('falls back to a date further out', () => {
+    const label = formatDay(new Date(2026, 7, 12, 9, 0).toISOString(), now)
+    expect(label).not.toBe('今天')
+    expect(label).not.toBe('明天')
+  })
+
+  it('returns the raw value rather than "Invalid Date"', () => {
+    expect(formatDay('nonsense', now)).toBe('nonsense')
+  })
+})
+
 describe('formatRange', () => {
   it('shows a single time for an entry with no end', () => {
-    // "09:00–" reads as unfinished rather than as a moment.
-    const shown = formatRange({ startsAt: '2026-08-09T09:00:00Z', endsAt: undefined })
-    expect(shown).not.toContain('–')
+    expect(formatRange({ startsAt: '2026-08-09T09:00:00Z', endsAt: undefined })).not.toContain('–')
   })
 
   it('shows a range when there is an end', () => {
-    const shown = formatRange({
-      startsAt: '2026-08-09T09:00:00Z',
-      endsAt: '2026-08-09T10:00:00Z',
-    })
-    expect(shown).toContain('–')
+    expect(
+      formatRange({ startsAt: '2026-08-09T09:00:00Z', endsAt: '2026-08-09T10:00:00Z' }),
+    ).toContain('–')
   })
 
   it('returns the raw value rather than "Invalid Date"', () => {

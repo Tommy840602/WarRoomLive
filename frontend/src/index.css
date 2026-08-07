@@ -1,4 +1,9 @@
+@import './theme.css';
+
 :root {
+  /* color-scheme is set from JS to match the resolved skin, so browser chrome —
+     scrollbars, date pickers, form controls — follows the room's clock too.
+     Declared here only as the pre-hydration default. */
   color-scheme: dark;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans TC', sans-serif;
 }
@@ -9,6 +14,22 @@
 
 body {
   margin: 0;
-  background: #0f1115;
-  color: #e6e8eb;
+  background: var(--bg);
+  color: var(--ink);
+  transition: var(--skin-fade);
+}
+
+/* Times are read as measurements here, so they get an instrument's typeface and
+   columns that line up between rows. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* A keyboard user must always be able to see where they are — the default
+   outline disappears against several of these surfaces. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }

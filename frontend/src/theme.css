@@ -1,0 +1,95 @@
+/* The room's two skins.
+ *
+ * Not "a light theme and a dark theme" — the same room at two times of day, and
+ * the clock decides (see theme/theme.ts). What holds the identity together
+ * across the switch is the accent: one hue, instrument amber, the colour of a
+ * lit indicator on a console. Only its lightness changes, because amber that
+ * reads on ink is unreadable on paper.
+ *
+ * Night is a blue-black, the colour a screen is in an unlit room. Day is bone,
+ * not white — a war room is not a text editor, and a full-white field beside
+ * video tiles is a lamp pointed at the viewer.
+ *
+ * Every value below is a token. Nothing in App.css should carry a literal
+ * colour, or the skins drift apart one rule at a time. */
+
+:root,
+:root[data-theme='night'] {
+  --bg: #0e1116;
+  --surface: #151a21;
+  --surface-raised: #1c222b;
+  --surface-hover: #222935;
+  --line: #232a33;
+  --line-strong: #313a46;
+
+  --ink: #e7e9ec;
+  --ink-dim: #8b949e;
+  --ink-faint: #626b76;
+
+  --accent: #f0a020;
+  --accent-ink: #10141a;
+  --accent-soft: #3a2a0e;
+
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --danger: #ff6b5e;
+  --danger-soft: #3a1714;
+  --info: #6ea8fe;
+
+  --tile-bg: #000;
+  --on-tile: #f0f2f4;
+  --sticky-bg: #f4dc8a;
+  --sticky-ink: #1a1a1a;
+
+  --shadow: 0 1px 2px rgb(0 0 0 / 45%);
+}
+
+:root[data-theme='day'] {
+  --bg: #f2efe9;
+  --surface: #fbfaf7;
+  --surface-raised: #ffffff;
+  --surface-hover: #ebe7df;
+  --line: #ddd8ce;
+  --line-strong: #c6bfb2;
+
+  --ink: #1b1f24;
+  --ink-dim: #5c6570;
+  --ink-faint: #8a93a0;
+
+  /* Amber darkened until it carries text weight on bone. */
+  --accent: #9a6200;
+  --accent-ink: #fffaf0;
+  --accent-soft: #f6e6c8;
+
+  --ok: #1f8a4c;
+  --warn: #a16207;
+  --danger: #c0392b;
+  --danger-soft: #f7ddd8;
+  --info: #1f5fbf;
+
+  /* Video is video: the tile stays black in both skins, or the letterboxing
+     glows white around someone's face. */
+  --tile-bg: #000;
+  /* …and so anything sitting on the tile stays light in both skins. In day the
+     name badge inherited the page's dark ink and went invisible on its own
+     black scrim. */
+  --on-tile: #f0f2f4;
+  --sticky-bg: #fff2b8;
+  --sticky-ink: #1a1a1a;
+
+  --shadow: 0 1px 2px rgb(27 31 36 / 12%);
+}
+
+/* The default is no transition, and the media query turns it on — the other way
+   round would leave the "none" rule winning on specificity ties and the
+   crossfade silently dead. Someone who asked their system to reduce motion is
+   asking this to stay off. */
+:root {
+  --skin-fade: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :root {
+    --skin-fade: background-color 420ms ease, color 420ms ease, border-color 420ms ease;
+  }
+}

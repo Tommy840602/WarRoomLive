@@ -19,9 +19,10 @@ import { MemberList, type Member } from './components/MemberList'
 import { RecordingsPanel, type Recording } from './components/RecordingsPanel'
 import { FilesPanel } from './components/FilesPanel'
 import { SearchPanel, SEARCH_PAGE_SIZE, type SearchHit } from './components/SearchPanel'
-import { TodoPanel, localInputToInstant } from './components/TodoPanel'
+import { TodoPanel } from './components/TodoPanel'
 import { CalendarPanel } from './components/CalendarPanel'
 import { ReactionBar } from './components/ReactionBar'
+import { ThemeToggle } from './components/ThemeToggle'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
 import type {
   Attachment,
@@ -34,6 +35,7 @@ import type {
 } from './signaling/types'
 import type { PeerQuality } from './webrtc/quality'
 import { useAuth } from './auth/AuthGate'
+import { useTheme } from './theme/useTheme'
 import './App.css'
 
 type Status = 'idle' | 'connecting' | 'in-room' | 'error'
@@ -51,11 +53,12 @@ interface ChatEntry {
   name?: string
 }
 
-/** The side panels a narrow screen shows one at a time. */
+/** The side panels, one of which is open at a time. */
 type SidebarTab = 'members' | 'todos' | 'calendar' | 'recordings' | 'search' | 'files' | 'chat'
 
 export default function App() {
   const { token, displayName: authName } = useAuth()
+  const { theme, preference: themePreference, setPreference: setThemePreference } = useTheme()
   const [room, setRoom] = useState('war-room')
   // With OIDC active the identity provider supplies the name; it stays editable.
   const [name, setName] = useState(authName ?? '')
@@ -87,8 +90,8 @@ export default function App() {
   // The shared list and calendar need a database; without one the endpoints
   // 404 and the panels are not offered rather than failing on every action.
   const [agendaAvailable, setAgendaAvailable] = useState(false)
-  // Which side panel is showing on a narrow screen. Chat is the default because
-  // it is the one people keep open; on a wide screen this is ignored entirely.
+  // Which side panel is showing. Chat is the default because it is the one
+  // people keep open.
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('chat')
 
   const clientRef = useRef<SignalingClient | null>(null)
@@ -398,7 +401,9 @@ export default function App() {
     (text: string, assignee: string, dueAt: string) =>
       agendaWrite(`/api/todos/${roomPath()}`, {
         method: 'POST',
-        body: JSON.stringify({ text, assignee, dueAt: localInputToInstant(dueAt) }),
+        // Already an instant: the capture line parsed it against the local
+        // clock, so no further conversion belongs here.
+        body: JSON.stringify({ text, assignee, dueAt }),
       }),
     [agendaWrite],
   )
@@ -682,9 +687,9 @@ export default function App() {
   const isHost = roomState.host === selfIdRef.current
 
   /**
-   * Which side panels exist right now. Drives the narrow-screen tab bar, so it
-   * never offers a tab for a panel that is not rendered — a tab that switches to
-   * nothing reads as a broken app.
+   * Which side panels exist right now. Drives the tab bar, so it never offers a
+   * tab for a panel that is not rendered — a tab that switches to nothing reads
+   * as a broken app.
    */
   const sidebarPanels = useMemo(() => {
     const panels: { id: SidebarTab; label: string }[] = []
@@ -791,7 +796,14 @@ export default function App() {
   return (
     <main className="app">
       <header className="app__header">
-        <h1>WarRoomLive</h1>
+        <div className="app__masthead">
+          <h1>WarRoomLive</h1>
+          <ThemeToggle
+            theme={theme}
+            preference={themePreference}
+            onChange={setThemePreference}
+          />
+        </div>
         <p className="app__subtitle">低延遲跨部門協作討論室</p>
       </header>
 
@@ -888,9 +900,10 @@ export default function App() {
           ))}
         </div>
         <div className="sidebar" data-active={sidebarTab}>
-          {/* Only rendered on narrow screens (see App.css). A phone cannot show
-              five stacked panels usefully, so there they become one at a time;
-              on a desktop every panel stays visible and this bar is hidden. */}
+          {/* Shown at every width. Seven panels stacked in a 320px rail give
+              each a sliver and none of them enough room to be read — on a
+              desktop as much as on a phone — so one is open at a time and this
+              chooses which. */}
           <nav className="sidebar__tabs" aria-label="側邊面板">
             {sidebarPanels.map((panel) => (
               <button

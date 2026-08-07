@@ -4,14 +4,22 @@
   padding: 2rem 1.5rem;
 }
 
+.app__masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
 .app__header h1 {
   margin: 0;
   font-size: 1.8rem;
+  letter-spacing: -0.01em;
 }
 
 .app__subtitle {
   margin: 0.25rem 0 1.5rem;
-  color: #9aa0a6;
+  color: var(--ink-dim);
 }
 
 .app__controls {
@@ -26,14 +34,14 @@
   flex-direction: column;
   gap: 0.35rem;
   font-size: 0.85rem;
-  color: #9aa0a6;
+  color: var(--ink-dim);
 }
 
 .app__controls input {
   padding: 0.5rem 0.65rem;
-  border: 1px solid #2a2f38;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: #171a21;
+  background: var(--surface);
   color: inherit;
   font-size: 1rem;
 }
@@ -42,8 +50,8 @@
   padding: 0.55rem 1.1rem;
   border: none;
   border-radius: 6px;
-  background: #3b82f6;
-  color: white;
+  background: var(--accent);
+  color: var(--accent-ink);
   font-size: 0.95rem;
   cursor: pointer;
 }
@@ -54,27 +62,27 @@
 }
 
 .app__controls .btn-secondary {
-  background: #2f3846;
+  background: var(--surface-raised);
 }
 
 .app__error {
-  color: #f87171;
-  background: #2a1416;
+  color: var(--danger);
+  background: var(--danger-soft);
   padding: 0.6rem 0.9rem;
   border-radius: 6px;
 }
 
 .app__warning {
-  color: #fbbf24;
-  background: #2a2411;
+  color: var(--warn);
+  background: var(--accent-soft);
   padding: 0.6rem 0.9rem;
   border-radius: 6px;
   font-size: 0.9rem;
 }
 
 .app__reconnecting {
-  color: #93c5fd;
-  background: #14202a;
+  color: var(--info);
+  background: var(--accent-soft);
   padding: 0.6rem 0.9rem;
   border-radius: 6px;
   font-size: 0.9rem;
@@ -98,7 +106,7 @@
 .video-tile {
   margin: 0;
   position: relative;
-  background: #000;
+  background: var(--tile-bg);
   border-radius: 10px;
   overflow: hidden;
   aspect-ratio: 16 / 9;
@@ -116,6 +124,8 @@
   bottom: 0.5rem;
   padding: 0.15rem 0.5rem;
   background: rgba(0, 0, 0, 0.6);
+  /* Its own scrim, not the page's — so it does not follow the skin's ink. */
+  color: var(--on-tile);
   border-radius: 4px;
   font-size: 0.8rem;
   display: flex;
@@ -141,7 +151,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #1a1e26;
+  background: var(--surface-raised);
 }
 
 .reactions-bar {
@@ -156,20 +166,20 @@
   font-size: 1.15rem;
   line-height: 1;
   padding: 0.4rem 0.6rem;
-  border: 1px solid #2a2f38;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #171a21;
+  background: var(--surface);
   cursor: pointer;
 }
 
 .reactions-bar__btn:hover,
 .reactions-bar__hand:hover {
-  background: #1c212b;
+  background: var(--surface-raised);
 }
 
 .reactions-bar__hand--on {
-  background: #3b2f12;
-  border-color: #a97b23;
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
 .floating-reactions {
@@ -206,12 +216,12 @@
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  background: #2f3846;
+  background: var(--surface-raised);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 1.6rem;
-  color: #e6e8eb;
+  color: var(--ink);
 }
 
 .sidebar {
@@ -221,41 +231,60 @@
   min-width: 0;
 }
 
-/* Only ever shown by the narrow-screen media query, which lives at the end of
-   this file: same specificity, so whichever comes last wins, and the override
-   has to be the one that does. */
+/* Shown at every width. Seven panels stacked in a 320px rail means each gets a
+   sliver and none gets read; one at a time gets the whole column. */
 .sidebar__tabs {
-  display: none;
-  gap: 0.3rem;
+  display: flex;
+  gap: 0.25rem;
   overflow-x: auto;
+  padding-bottom: 0.15rem;
+  scrollbar-width: thin;
 }
 
 .sidebar__tab {
-  flex: 1 0 auto;
-  border: 1px solid #2a2f38;
-  border-radius: 8px;
-  background: #171a21;
-  color: #9aa0a6;
+  flex: 0 1 auto;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-faint);
   cursor: pointer;
-  padding: 0.4rem 0.7rem;
-  font-size: 0.8rem;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.78rem;
+  font-family: inherit;
   white-space: nowrap;
 }
 
-.sidebar__tab[aria-pressed='true'] {
-  background: #2f3846;
-  color: #e6e8eb;
-  border-color: #3b82f6;
+.sidebar__tab:hover {
+  color: var(--ink-dim);
 }
 
+.sidebar__tab[aria-pressed='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+/* One panel at a time, at every width. */
 .sidebar__panel {
+  display: none;
   min-width: 0;
 }
 
+.sidebar[data-active='members'] .sidebar__panel[data-panel='members'],
+.sidebar[data-active='todos'] .sidebar__panel[data-panel='todos'],
+.sidebar[data-active='calendar'] .sidebar__panel[data-panel='calendar'],
+.sidebar[data-active='recordings'] .sidebar__panel[data-panel='recordings'],
+.sidebar[data-active='search'] .sidebar__panel[data-panel='search'],
+.sidebar[data-active='files'] .sidebar__panel[data-panel='files'],
+.sidebar[data-active='chat'] .sidebar__panel[data-panel='chat'] {
+  display: block;
+}
+
 .members {
-  border: 1px solid #2a2f38;
+  transition: var(--skin-fade);
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: #12151b;
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -263,7 +292,7 @@
   margin: 0;
   padding: 0.6rem 0.9rem;
   font-size: 0.95rem;
-  border-bottom: 1px solid #2a2f38;
+  border-bottom: 1px solid var(--line);
 }
 
 .members__list {
@@ -286,14 +315,14 @@
 }
 
 .members__item:hover {
-  background: #1c212b;
+  background: var(--surface-raised);
 }
 
 .members__dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #22c55e;
+  background: var(--ok);
   flex: 0 0 auto;
 }
 
@@ -301,8 +330,8 @@
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  background: #2f3846;
-  color: #e6e8eb;
+  background: var(--surface-raised);
+  color: var(--ink);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -327,7 +356,7 @@
 
 .members__you {
   margin-left: 0.35rem;
-  color: #9aa0a6;
+  color: var(--ink-dim);
   font-size: 0.75rem;
 }
 
@@ -341,15 +370,15 @@
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: #9aa0a6;
+  color: var(--ink-dim);
   font-size: 0.85rem;
   cursor: pointer;
   line-height: 1.4;
 }
 
 .members__kick:hover {
-  background: #5f2120;
-  color: #f28b82;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .auth {
@@ -367,21 +396,22 @@
   padding: 0.55rem 1.5rem;
   border: none;
   border-radius: 6px;
-  background: #3b82f6;
-  color: white;
+  background: var(--accent);
+  color: var(--accent-ink);
   font-size: 0.95rem;
   cursor: pointer;
 }
 
 .auth__status {
-  color: #9aa0a6;
+  color: var(--ink-dim);
 }
 
 .notes {
+  transition: var(--skin-fade);
   margin-top: 1rem;
-  border: 1px solid #2a2f38;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: #12151b;
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -389,7 +419,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid #2a2f38;
+  border-bottom: 1px solid var(--line);
   padding-right: 0.6rem;
 }
 
@@ -409,18 +439,18 @@
 
 .notes__tab {
   padding: 0.3rem 0.8rem;
-  border: 1px solid #2a2f38;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: #171a21;
-  color: #9aa0a6;
+  background: var(--surface);
+  color: var(--ink-dim);
   font-size: 0.85rem;
   cursor: pointer;
 }
 
 .notes__tab--active {
-  background: #1e3a5f;
-  color: #e6e8eb;
-  border-color: #3b82f6;
+  background: var(--accent-soft);
+  color: var(--ink);
+  border-color: var(--accent);
 }
 
 .board {
@@ -432,7 +462,7 @@
   align-items: center;
   gap: 0.4rem;
   padding: 0.5rem 0.9rem;
-  border-bottom: 1px solid #2a2f38;
+  border-bottom: 1px solid var(--line);
 }
 
 .board__pen {
@@ -444,28 +474,28 @@
 }
 
 .board__pen--active {
-  border-color: #3b82f6;
+  border-color: var(--accent);
 }
 
 .board__tool {
   padding: 0.3rem 0.7rem;
-  border: 1px solid #2a2f38;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: #171a21;
-  color: #e6e8eb;
+  background: var(--surface);
+  color: var(--ink);
   font-size: 0.85rem;
   cursor: pointer;
 }
 
 .board__hint {
   margin-left: auto;
-  color: #6b7280;
+  color: var(--ink-faint);
   font-size: 0.75rem;
 }
 
 .board__stage {
   cursor: crosshair;
-  background: #0d1017;
+  background: var(--bg);
 }
 
 .board__edit {
@@ -473,10 +503,10 @@
   width: 150px;
   height: 80px;
   padding: 0.4rem;
-  border: 1px solid #3b82f6;
+  border: 1px solid var(--accent);
   border-radius: 6px;
-  background: #fff8dc;
-  color: #1a1a1a;
+  background: var(--sticky-bg);
+  color: var(--sticky-ink);
   font-size: 14px;
   resize: none;
   z-index: 5;
@@ -486,11 +516,11 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #6b7280;
+  background: var(--ink-faint);
 }
 
 .notes__dot--on {
-  background: #22c55e;
+  background: var(--ok);
 }
 
 .notes__content .notes__editor {
@@ -526,18 +556,19 @@
   border-radius: 4px 4px 4px 0;
   font-size: 0.65rem;
   font-weight: 600;
-  color: #0d1117;
+  color: var(--bg);
   white-space: nowrap;
   user-select: none;
 }
 
 .chat {
+  transition: var(--skin-fade);
   display: flex;
   flex-direction: column;
   height: 480px;
-  border: 1px solid #2a2f38;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: #12151b;
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -545,7 +576,7 @@
   margin: 0;
   padding: 0.6rem 0.9rem;
   font-size: 0.95rem;
-  border-bottom: 1px solid #2a2f38;
+  border-bottom: 1px solid var(--line);
 }
 
 .chat__log {
@@ -558,7 +589,7 @@
 }
 
 .chat__empty {
-  color: #6b7280;
+  color: var(--ink-faint);
   font-size: 0.85rem;
   margin: auto;
 }
@@ -570,18 +601,18 @@
   max-width: 85%;
   padding: 0.4rem 0.6rem;
   border-radius: 8px;
-  background: #1c212b;
+  background: var(--surface-raised);
   align-self: flex-start;
 }
 
 .chat__msg--mine {
   align-self: flex-end;
-  background: #1e3a5f;
+  background: var(--accent-soft);
 }
 
 .chat__from {
   font-size: 0.7rem;
-  color: #9aa0a6;
+  color: var(--ink-dim);
 }
 
 .chat__text {
@@ -593,15 +624,15 @@
   display: flex;
   gap: 0.5rem;
   padding: 0.6rem;
-  border-top: 1px solid #2a2f38;
+  border-top: 1px solid var(--line);
 }
 
 .chat__form input {
   flex: 1;
   padding: 0.5rem 0.65rem;
-  border: 1px solid #2a2f38;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: #171a21;
+  background: var(--surface);
   color: inherit;
   font-size: 0.9rem;
 }
@@ -610,8 +641,8 @@
   padding: 0.5rem 0.9rem;
   border: none;
   border-radius: 6px;
-  background: #3b82f6;
-  color: white;
+  background: var(--accent);
+  color: var(--accent-ink);
   cursor: pointer;
 }
 
@@ -626,21 +657,21 @@
 }
 
 .members__signal--good {
-  color: #4ade80;
+  color: var(--ok);
 }
 
 .members__signal--fair {
-  color: #fbbf24;
+  color: var(--warn);
 }
 
 .members__signal--poor {
-  color: #f87171;
+  color: var(--danger);
 }
 
 .recordings {
-  border: 1px solid #2a2f38;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: #12151b;
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -648,7 +679,7 @@
   margin: 0;
   padding: 0.6rem 0.9rem;
   font-size: 0.95rem;
-  border-bottom: 1px solid #2a2f38;
+  border-bottom: 1px solid var(--line);
 }
 
 .recordings__list {
@@ -671,7 +702,7 @@
 }
 
 .recordings__item:hover {
-  background: #1c212b;
+  background: var(--surface-raised);
 }
 
 .recordings__play {
@@ -679,14 +710,14 @@
   border-radius: 50%;
   width: 26px;
   height: 26px;
-  background: #2f3846;
-  color: #e6e8eb;
+  background: var(--surface-raised);
+  color: var(--ink);
   cursor: pointer;
   flex: 0 0 auto;
 }
 
 .recordings__play:hover {
-  background: #3b82f6;
+  background: var(--accent);
 }
 
 .recordings__meta {
@@ -702,15 +733,15 @@
   border-radius: 6px;
   padding: 0.2rem 0.45rem;
   background: transparent;
-  color: #9aa0a6;
+  color: var(--ink-dim);
   cursor: pointer;
   flex: 0 0 auto;
   font-size: 0.8rem;
 }
 
 .recordings__delete:hover {
-  background: #7f1d1d;
-  color: #fee2e2;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .recordings__when {
@@ -719,26 +750,26 @@
 
 .recordings__detail {
   font-size: 0.75rem;
-  color: #9aa0a6;
+  color: var(--ink-dim);
 }
 
 .recordings__player {
   width: 100%;
   display: block;
-  background: #000;
+  background: var(--tile-bg);
 }
 
 .recordings__error {
   margin: 0;
   padding: 0.4rem 0.9rem;
-  color: #f87171;
+  color: var(--danger);
   font-size: 0.8rem;
 }
 
 /* --- Shared files ------------------------------------------------------- */
 
 .files {
-  border-top: 1px solid #2a2f37;
+  border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -748,14 +779,14 @@
   margin: 0;
   padding: 0.6rem 0.9rem 0.4rem;
   font-size: 0.85rem;
-  color: #9aa0a6;
+  color: var(--ink-dim);
   font-weight: 600;
 }
 
 .files__input {
   margin: 0 0.9rem 0.4rem;
   font-size: 0.75rem;
-  color: #9aa0a6;
+  color: var(--ink-dim);
   max-width: calc(100% - 1.8rem);
 }
 
@@ -768,7 +799,7 @@
 .files__error {
   margin: 0;
   padding: 0.4rem 0.9rem;
-  color: #f87171;
+  color: var(--danger);
   font-size: 0.8rem;
 }
 
@@ -787,7 +818,7 @@
 }
 
 .files__item:hover {
-  background: #23272e;
+  background: var(--surface-hover);
 }
 
 .files__download {
@@ -795,14 +826,14 @@
   border-radius: 50%;
   width: 26px;
   height: 26px;
-  background: #2f3846;
-  color: #e6e8eb;
+  background: var(--surface-raised);
+  color: var(--ink);
   cursor: pointer;
   flex: 0 0 auto;
 }
 
 .files__download:hover {
-  background: #3b82f6;
+  background: var(--accent);
 }
 
 .files__meta {
@@ -822,7 +853,7 @@
 
 .files__detail {
   font-size: 0.75rem;
-  color: #9aa0a6;
+  color: var(--ink-dim);
 }
 
 .files__delete {
@@ -830,21 +861,21 @@
   border-radius: 6px;
   padding: 0.2rem 0.45rem;
   background: transparent;
-  color: #9aa0a6;
+  color: var(--ink-dim);
   cursor: pointer;
   flex: 0 0 auto;
   font-size: 0.8rem;
 }
 
 .files__delete:hover {
-  background: #7f1d1d;
-  color: #fee2e2;
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 /* --- Message search ------------------------------------------------------ */
 
 .search {
-  border-top: 1px solid #2a2f37;
+  border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -854,7 +885,7 @@
   margin: 0;
   padding: 0.6rem 0.9rem 0.4rem;
   font-size: 0.85rem;
-  color: #9aa0a6;
+  color: var(--ink-dim);
   font-weight: 600;
 }
 
@@ -867,10 +898,10 @@
 .search__input {
   flex: 1 1 auto;
   min-width: 0;
-  background: #1b1f24;
-  border: 1px solid #2a2f37;
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  color: #e6e8eb;
+  color: var(--ink);
   padding: 0.35rem 0.5rem;
   font-size: 0.85rem;
 }
@@ -878,8 +909,8 @@
 .search__go {
   border: none;
   border-radius: 6px;
-  background: #2f3846;
-  color: #e6e8eb;
+  background: var(--surface-raised);
+  color: var(--ink);
   cursor: pointer;
   padding: 0.35rem 0.6rem;
 }
@@ -895,7 +926,7 @@
   gap: 0.35rem;
   padding: 0 0.9rem 0.4rem;
   font-size: 0.75rem;
-  color: #9aa0a6;
+  color: var(--ink-dim);
 }
 
 .search__error,
@@ -906,11 +937,11 @@
 }
 
 .search__error {
-  color: #f87171;
+  color: var(--danger);
 }
 
 .search__empty {
-  color: #9aa0a6;
+  color: var(--ink-dim);
 }
 
 .search__results {
@@ -929,7 +960,7 @@
 }
 
 .search__hit:hover {
-  background: #23272e;
+  background: var(--surface-hover);
 }
 
 .search__hit-head {
@@ -937,15 +968,15 @@
   gap: 0.4rem;
   align-items: baseline;
   font-size: 0.72rem;
-  color: #9aa0a6;
+  color: var(--ink-dim);
 }
 
 .search__hit-name {
-  color: #e6e8eb;
+  color: var(--ink);
 }
 
 .search__hit-room {
-  color: #60a5fa;
+  color: var(--info);
 }
 
 .search__hit-when {
@@ -966,10 +997,10 @@
 
 .search__paging button {
   flex: 1 1 0;
-  border: 1px solid #2a2f37;
+  border: 1px solid var(--line);
   border-radius: 6px;
   background: transparent;
-  color: #e6e8eb;
+  color: var(--ink);
   cursor: pointer;
   padding: 0.25rem;
   font-size: 0.75rem;
@@ -980,231 +1011,327 @@
   cursor: default;
 }
 
-/* --- Shared to-do list --------------------------------------------------- */
+/* --- Agenda: the shared list and the calendar ----------------------------
+   Both are the same shape, because to a room they are the same act — something
+   we said we would do, and when. Every row leads with a relative-time rail in
+   the same column, so the panel is read down that column rather than across
+   each line. That rail is the one loud thing here; everything else is quiet. */
 
-.todos,
-.calendar {
-  border-top: 1px solid #2a2f37;
+.agenda {
+  border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
-.todos__title,
-.calendar__title {
-  margin: 0;
-  padding: 0.6rem 0.9rem 0.4rem;
-  font-size: 0.85rem;
-  color: #9aa0a6;
-  font-weight: 600;
+.agenda__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.7rem 0.9rem 0.5rem;
 }
 
-.todos__form,
-.calendar__form {
+.agenda__title {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.agenda__count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+/* --- One-line capture --- */
+
+.capture {
   display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.4rem;
   padding: 0 0.9rem 0.5rem;
 }
 
-.todos__row,
-.calendar__row {
-  display: flex;
-  gap: 0.35rem;
-}
-
-.todos input,
-.calendar input {
+.capture__line {
+  flex: 1 1 auto;
   min-width: 0;
-  background: #1b1f24;
-  border: 1px solid #2a2f37;
-  border-radius: 6px;
-  color: #e6e8eb;
-  padding: 0.3rem 0.45rem;
-  font-size: 0.8rem;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: 0;
+  color: var(--ink);
+  padding: 0.35rem 0.1rem;
+  font-size: 0.88rem;
+  font-family: inherit;
 }
 
-.todos__text,
-.calendar__subject {
-  width: 100%;
+.capture__line::placeholder {
+  color: var(--ink-faint);
 }
 
-.todos__row input,
-.calendar__row input {
-  flex: 1 1 0;
+.capture__line:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
 }
 
-.todos__form button,
-.calendar__form button {
+.capture__go {
   flex: 0 0 auto;
   border: none;
-  border-radius: 6px;
-  background: #2f3846;
-  color: #e6e8eb;
+  border-radius: 5px;
+  background: var(--accent);
+  color: var(--accent-ink);
   cursor: pointer;
-  padding: 0.3rem 0.6rem;
-  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 
-.todos__form button:disabled,
-.calendar__form button:disabled {
-  opacity: 0.4;
+/* Disabled still has to be legible: on bone, surface-on-surface made the
+   button vanish rather than read as unavailable. */
+.capture__go:disabled {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-faint);
   cursor: default;
 }
 
-.todos__error,
-.calendar__error {
+/* What the line was understood to mean, shown before it is sent. */
+.capture__read {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
   margin: 0;
-  padding: 0.4rem 0.9rem;
-  color: #f87171;
-  font-size: 0.8rem;
+  padding: 0 0.9rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--ink-dim);
 }
 
-.calendar__empty {
-  margin: 0;
-  padding: 0.4rem 0.9rem;
-  color: #9aa0a6;
-  font-size: 0.8rem;
+.capture__read-label {
+  color: var(--ink-faint);
 }
 
-.todos__list {
+.capture__read-text {
+  color: var(--ink);
+}
+
+.capture__read--needs .capture__read-label {
+  color: var(--warn);
+}
+
+.capture__read-hint {
+  color: var(--ink-faint);
+}
+
+/* --- Rows --- */
+
+.agenda__list,
+.day__entries {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+.agenda__list {
   overflow-y: auto;
-  max-height: 40vh;
+  max-height: 44vh;
 }
 
-.todos__item {
-  display: flex;
-  align-items: flex-start;
+.agenda__empty,
+.agenda__error {
+  margin: 0;
+  padding: 0.2rem 0.9rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+.agenda__empty {
+  color: var(--ink-faint);
+}
+
+.agenda__error {
+  color: var(--danger);
+}
+
+.row {
+  display: grid;
+  /* check | time rail | body | drop — the rail is a fixed column so the times
+     line up between rows and the eye can run down it. */
+  grid-template-columns: auto 5.5rem 1fr auto;
+  align-items: baseline;
   gap: 0.5rem;
-  padding: 0.35rem 0.9rem;
+  padding: 0.32rem 0.9rem;
 }
 
-.todos__item:hover {
-  background: #23272e;
+.row:hover {
+  background: var(--surface-hover);
 }
 
-/* Done items stay in place but recede — the list is about what is still open. */
-.todos__item--done .todos__body {
-  text-decoration: line-through;
-  color: #9aa0a6;
+.row__check {
+  accent-color: var(--accent);
+  margin: 0;
+  align-self: center;
 }
 
-.todos__meta {
+.row__when {
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row__when--overdue {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.row__when--soon {
+  color: var(--accent);
+}
+
+.row__body {
   display: flex;
-  flex-direction: column;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.3rem;
   min-width: 0;
-  flex: 1 1 auto;
 }
 
-.todos__body {
-  font-size: 0.85rem;
+.row__text {
+  font-size: 0.86rem;
   overflow-wrap: anywhere;
 }
 
-.todos__detail {
-  display: flex;
-  gap: 0.5rem;
+.row__note {
+  flex-basis: 100%;
   font-size: 0.72rem;
-  color: #9aa0a6;
-  flex-wrap: wrap;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
 }
 
-.todos__who {
-  color: #60a5fa;
+/* A finished item stays in place but recedes — the list is about what is open,
+   and removing it would lose the record of who closed it. */
+.row--done .row__text {
+  text-decoration: line-through;
+  color: var(--ink-faint);
 }
 
-.todos__due-at--overdue {
-  color: #f87171;
-}
-
-.todos__delete,
-.calendar__delete {
+.row__drop {
   border: none;
-  border-radius: 6px;
-  padding: 0.2rem 0.45rem;
+  border-radius: 5px;
+  padding: 0.1rem 0.4rem;
   background: transparent;
-  color: #9aa0a6;
+  color: var(--ink-faint);
   cursor: pointer;
-  flex: 0 0 auto;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
 }
 
-.todos__delete:hover,
-.calendar__delete:hover {
-  background: #7f1d1d;
-  color: #fee2e2;
+.row:hover .row__drop {
+  color: var(--ink-dim);
 }
 
-/* --- Shared calendar ----------------------------------------------------- */
+.row__drop:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
 
-.calendar__list,
-.calendar__entries {
-  list-style: none;
+/* --- Small labels --- */
+
+.chip {
+  font-size: 0.68rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.chip--who {
+  color: var(--info);
+  background: transparent;
+  padding-left: 0;
+}
+
+.chip--soon {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.chip--clock {
+  color: var(--ink-dim);
+  background: transparent;
+  padding-left: 0;
+}
+
+.chip--done {
+  color: var(--ok);
+  background: transparent;
+  padding-left: 0;
+}
+
+/* --- Calendar day grouping --- */
+
+.day__label {
   margin: 0;
-  padding: 0;
-}
-
-.calendar__list {
-  overflow-y: auto;
-  max-height: 40vh;
-}
-
-.calendar__day-label {
-  margin: 0;
-  padding: 0.35rem 0.9rem 0.15rem;
-  font-size: 0.72rem;
-  color: #60a5fa;
+  padding: 0.5rem 0.9rem 0.15rem;
+  font-size: 0.7rem;
   font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--accent);
   position: sticky;
   top: 0;
-  background: #12151b;
+  background: var(--surface);
 }
 
-.calendar__entry {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  padding: 0.25rem 0.9rem;
+.day .row {
+  grid-template-columns: 5.5rem 1fr auto;
 }
 
-.calendar__entry:hover {
-  background: #23272e;
+/* --- Theme switch --- */
+
+/* A utility, not a primary control. It sat top-right as the brightest thing on
+   the page — a white pill outshouting the title — so the container is gone and
+   only the active segment carries any weight at all. */
+.skin {
+  display: inline-flex;
+  gap: 1px;
+  align-self: flex-start;
 }
 
-.calendar__when {
-  font-size: 0.75rem;
-  color: #9aa0a6;
-  flex: 0 0 auto;
-  font-variant-numeric: tabular-nums;
-}
-
-.calendar__meta {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.calendar__subject-text {
-  font-size: 0.85rem;
-  overflow-wrap: anywhere;
-}
-
-.calendar__description {
+.skin__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
   font-size: 0.72rem;
-  color: #9aa0a6;
-  overflow-wrap: anywhere;
+  font-family: inherit;
+}
+
+.skin__btn:hover {
+  color: var(--ink-dim);
+}
+
+.skin__btn[aria-pressed='true'] {
+  color: var(--ink-dim);
+  border-bottom-color: var(--line-strong);
+}
+
+.skin__resolved {
+  color: var(--accent);
 }
 
 /* --- Narrow screens ------------------------------------------------------
    Below this width the two-column workspace becomes one, and the sidebar's
-   five stacked panels become a tab strip: on a phone, stacking them means the
-   chat box sits several screens below the video, which is the one place nobody
-   will scroll to during a call. On a wide screen every panel stays visible and
-   the tab bar is not rendered at all. */
+   panels tighten up. The tab strip itself is not a narrow-screen device — it
+   applies at every width (see .sidebar__tabs above), because seven panels
+   stacked in a rail is unreadable on a desktop too. */
 @media (max-width: 800px) {
   .app {
     padding: 1rem 0.85rem 1.5rem;
@@ -1247,21 +1374,13 @@
     gap: 0.5rem;
   }
 
-  .sidebar__tabs {
-    display: flex;
+  /* The time rail costs too much of a 390px line; drop it to what fits. */
+  .row {
+    grid-template-columns: auto 4.5rem 1fr auto;
+    gap: 0.4rem;
   }
 
-  .sidebar__panel {
-    display: none;
-  }
-
-  .sidebar[data-active='members'] .sidebar__panel[data-panel='members'],
-  .sidebar[data-active='todos'] .sidebar__panel[data-panel='todos'],
-  .sidebar[data-active='calendar'] .sidebar__panel[data-panel='calendar'],
-  .sidebar[data-active='recordings'] .sidebar__panel[data-panel='recordings'],
-  .sidebar[data-active='search'] .sidebar__panel[data-panel='search'],
-  .sidebar[data-active='files'] .sidebar__panel[data-panel='files'],
-  .sidebar[data-active='chat'] .sidebar__panel[data-panel='chat'] {
-    display: block;
+  .day .row {
+    grid-template-columns: 4.5rem 1fr auto;
   }
 }

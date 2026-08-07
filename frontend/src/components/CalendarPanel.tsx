@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { CalendarEvent } from '../signaling/types'
-import { localInputToInstant } from './TodoPanel'
+import { parseCapture, relativeTime } from '../agenda/capture'
 
 interface CalendarPanelProps {
   events: CalendarEvent[]
@@ -9,30 +9,30 @@ interface CalendarPanelProps {
 }
 
 /**
- * The room's shared calendar.
+ * The room's shared calendar, read forwards.
  *
- * <p>Shows what is coming, because that is what a calendar in a war room is
- * for; the server reads forwards from now unless asked otherwise. Entries are
- * grouped by day, since "which day" is the first question and a flat list of
- * timestamps makes it the hardest one.
+ * Same one-line capture as the list, for the same reason. Entries group under
+ * a day heading because "which day" is the first question, and every row leads
+ * with how far off it is, because a room reads "3 小時後" faster than it reads
+ * "8/9 09:00" — the absolute time is in the tooltip, where it belongs.
  */
 export function CalendarPanel({ events, onAdd, onDelete }: CalendarPanelProps) {
-  const [title, setTitle] = useState('')
-  const [starts, setStarts] = useState('')
-  const [ends, setEnds] = useState('')
+  const [line, setLine] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<number | null>(null)
 
+  const parsed = useMemo(() => parseCapture(line), [line])
+
   const add = async () => {
-    if (!title.trim() || !starts) return
+    if (!parsed.text || !parsed.dueAt) return
     setBusy(true)
     setError(null)
     try {
-      await onAdd(title.trim(), localInputToInstant(starts), localInputToInstant(ends))
-      setTitle('')
-      setStarts('')
-      setEnds('')
+      // A calendar entry is a moment, so what the line parsed as a deadline is
+      // its start. No end unless someone edits it — most entries have none.
+      await onAdd(parsed.text, parsed.dueAt, '')
+      setLine('')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -55,67 +55,78 @@ export function CalendarPanel({ events, onAdd, onDelete }: CalendarPanelProps) {
   }
 
   return (
-    <aside className="calendar">
-      <h2 className="calendar__title">行事曆 ({events.length})</h2>
+    <section className="agenda">
+      <header className="agenda__head">
+        <h2 className="agenda__title">行事曆</h2>
+        <span className="agenda__count tabular">接下來 {events.length}</span>
+      </header>
 
       <form
-        className="calendar__form"
+        className="capture"
         onSubmit={(e) => {
           e.preventDefault()
           void add()
         }}
       >
         <input
-          className="calendar__subject"
-          value={title}
-          placeholder="事項"
-          aria-label="行事曆事項"
-          onChange={(e) => setTitle(e.target.value)}
+          className="capture__line"
+          value={line}
+          placeholder="什麼事…  週三14:00"
+          aria-label="新增行事曆事項"
+          onChange={(e) => setLine(e.target.value)}
         />
-        <div className="calendar__row">
-          <input
-            type="datetime-local"
-            value={starts}
-            aria-label="開始時間"
-            onChange={(e) => setStarts(e.target.value)}
-          />
-          <input
-            type="datetime-local"
-            value={ends}
-            aria-label="結束時間"
-            onChange={(e) => setEnds(e.target.value)}
-          />
-          <button type="submit" disabled={busy || !title.trim() || !starts}>
-            新增
-          </button>
-        </div>
+        <button className="capture__go" type="submit" disabled={busy || !parsed.text || !parsed.dueAt}>
+          加入
+        </button>
       </form>
 
-      {error && <p className="calendar__error">⚠️ {error}</p>}
-      {events.length === 0 && <p className="calendar__empty">接下來沒有安排</p>}
+      {/* Unlike a to-do, a calendar entry without a time cannot be placed at
+          all — so say that, rather than disabling the button silently. */}
+      {parsed.text && !parsed.dueAt && (
+        <p className="capture__read capture__read--needs">
+          <span className="capture__read-label">還需要時間</span>
+          <span className="capture__read-hint">例如「明天15:00」「週三」「3天後」</span>
+        </p>
+      )}
+      {parsed.text && parsed.dueAt && (
+        <p className="capture__read">
+          <span className="capture__read-label">解讀為</span>
+          <span className="capture__read-text">{parsed.text}</span>
+          <span className="chip chip--soon tabular" title={new Date(parsed.dueAt).toLocaleString()}>
+            {relativeTime(parsed.dueAt)}
+          </span>
+        </p>
+      )}
 
-      <ul className="calendar__list">
+      {error && <p className="agenda__error">{error}</p>}
+      {events.length === 0 && <p className="agenda__empty">接下來沒有安排。</p>}
+
+      <ul className="agenda__list">
         {groupByDay(events).map(([day, ofDay]) => (
-          <li key={day} className="calendar__day">
-            <h3 className="calendar__day-label">{day}</h3>
-            <ul className="calendar__entries">
+          <li key={day} className="day">
+            <h3 className="day__label">{day}</h3>
+            <ul className="day__entries">
               {ofDay.map((event) => (
-                <li key={event.id} className="calendar__entry">
-                  <span className="calendar__when">{formatRange(event)}</span>
-                  <span className="calendar__meta">
-                    <span className="calendar__subject-text">{event.title}</span>
-                    {event.description && (
-                      <span className="calendar__description">{event.description}</span>
-                    )}
+                <li key={event.id} className="row">
+                  <span
+                    className="row__when tabular row__when--later"
+                    title={new Date(event.startsAt).toLocaleString()}
+                  >
+                    {relativeTime(event.startsAt)}
+                  </span>
+                  <span className="row__body">
+                    <span className="row__text">{event.title}</span>
+                    <span className="chip chip--clock tabular">{formatRange(event)}</span>
+                    {event.description && <span className="row__note">{event.description}</span>}
                   </span>
                   <button
-                    className="calendar__delete"
+                    className="row__drop"
                     aria-label={`刪除 ${event.title}`}
                     title={confirming === event.id ? '再按一次確認刪除' : '刪除'}
                     onClick={() => void remove(event.id)}
                     onBlur={() => setConfirming((id) => (id === event.id ? null : id))}
                   >
-                    {confirming === event.id ? '確認刪除' : '🗑'}
+                    {confirming === event.id ? '確認' : '×'}
                   </button>
                 </li>
               ))}
@@ -123,15 +134,15 @@ export function CalendarPanel({ events, onAdd, onDelete }: CalendarPanelProps) {
           </li>
         ))}
       </ul>
-    </aside>
+    </section>
   )
 }
 
 /**
  * Groups entries by local day, preserving the server's ordering.
  *
- * <p>A Map keeps insertion order, so the days come out in the order the server
- * sent them — re-sorting here would risk disagreeing with it.
+ * A Map keeps insertion order, so the days come out as the server sent them —
+ * re-sorting here would risk disagreeing with it.
  */
 export function groupByDay(events: CalendarEvent[]): [string, CalendarEvent[]][] {
   const byDay = new Map<string, CalendarEvent[]>()
@@ -144,17 +155,35 @@ export function groupByDay(events: CalendarEvent[]): [string, CalendarEvent[]][]
   return [...byDay]
 }
 
-export function formatDay(iso: string): string {
+/** Today and tomorrow are named, because that is what people call them. */
+export function formatDay(iso: string, now: Date = new Date()): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
+  const days = Math.round(
+    (startOfDay(date).getTime() - startOfDay(now).getTime()) / 86_400_000,
+  )
+  if (days === 0) return '今天'
+  if (days === 1) return '明天'
   return date.toLocaleDateString(undefined, { month: 'long', day: 'numeric', weekday: 'short' })
 }
 
+function startOfDay(date: Date): Date {
+  const out = new Date(date)
+  out.setHours(0, 0, 0, 0)
+  return out
+}
+
 export function formatRange(event: Pick<CalendarEvent, 'startsAt' | 'endsAt'>): string {
+  // 24-hour: a war room reads instruments, and "05:31 PM–06:31 PM" is twice
+  // the width of "17:31–18:31" for the same fact.
   const time = (iso: string) =>
-    new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    new Date(iso).toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
   const start = new Date(event.startsAt)
   if (Number.isNaN(start.getTime())) return event.startsAt
-  // An entry with no end is a moment, and showing "09:00–" reads as unfinished.
+  // An entry with no end is a moment; showing "09:00–" reads as unfinished.
   return event.endsAt ? `${time(event.startsAt)}–${time(event.endsAt)}` : time(event.startsAt)
 }

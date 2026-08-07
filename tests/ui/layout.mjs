@@ -1,14 +1,17 @@
-// The layout on a phone-sized screen. Nothing here can be checked without a
-// browser: media queries, whether a control is reachable, whether anything
-// spills off the side.
+// The workspace layout, and the skin it wears.
 //
-// The specific worry is the sidebar. It holds five panels, and stacking them on
-// a 390px screen puts the chat box several screens below the video — which is
-// exactly where nobody scrolls during a call. Below the breakpoint they become
-// one at a time.
+// Nothing here can be checked without a browser: media queries, whether a
+// control is reachable, whether anything spills off the side, whether the
+// document really carries the theme the clock chose.
+//
+// The sidebar holds up to seven panels. Stacking them puts the chat box several
+// screens below the video — exactly where nobody scrolls during a call — and on
+// a desktop a 320px rail gives each panel a sliver. So one is open at a time, at
+// every width, and the tab strip chooses which.
 import { RUN_ID, done, joinRoom, launch, ok, sleep } from './lib.mjs'
 
 const room = 'ui-layout-' + RUN_ID
+const DESKTOP = { width: 1280, height: 900 }
 // iPhone-ish portrait: the narrowest thing anyone will realistically use.
 const PHONE = { width: 390, height: 780 }
 
@@ -16,20 +19,15 @@ const browser = await launch()
 const page = await joinRoom(browser, { room, name: 'Mobile' })
 await sleep(2000)
 
-// --- Wide: every panel is visible at once and the tab strip is not shown.
-await page.setViewportSize({ width: 1280, height: 900 })
-await sleep(300)
-const wideVisible = await page.locator('.sidebar__panel:visible').count()
-ok(wideVisible >= 2, `a wide screen shows every panel at once (${wideVisible})`)
-ok(!(await page.locator('.sidebar__tabs').isVisible()),
-  'and offers no tab strip, because there is nothing to switch between')
+// --- One panel at a time, on a desktop as much as on a phone.
+for (const [label, size] of [['a wide screen', DESKTOP], ['a narrow screen', PHONE]]) {
+  await page.setViewportSize(size)
+  await sleep(300)
+  ok(await page.locator('.sidebar__tabs').isVisible(), `${label} offers the tab strip`)
+  const visible = await page.locator('.sidebar__panel:visible').count()
+  ok(visible === 1, `${label} shows exactly one panel (${visible})`)
+}
 
-// --- Narrow: one panel, chosen by the tabs.
-await page.setViewportSize(PHONE)
-await sleep(300)
-ok(await page.locator('.sidebar__tabs').isVisible(), 'a narrow screen offers the tab strip')
-ok(await page.locator('.sidebar__panel:visible').count() === 1,
-  'and shows exactly one panel')
 ok(await page.locator('.chat').isVisible(),
   'chat is the one it opens on — the panel people keep open')
 
@@ -57,6 +55,37 @@ ok(overflow.doc <= overflow.win + 1,
 // --- The video tiles still get a usable width rather than collapsing.
 const tile = await page.locator('.video-tile').first().boundingBox()
 ok(tile !== null && tile.width >= 150, `video tiles stay legible (${Math.round(tile?.width ?? 0)}px)`)
+
+// --- The skin. `auto` follows the local clock; an explicit choice overrides it
+//     and survives a reload, which is the whole reason the choice is stored.
+await page.setViewportSize(DESKTOP)
+const themeNow = () => page.evaluate(() => document.documentElement.dataset.theme)
+ok(['day', 'night'].includes(await themeNow()),
+  `the document carries a skin from the first paint (${await themeNow()})`)
+
+await page.locator('.skin__btn', { hasText: '日' }).first().click()
+await sleep(200)
+ok((await themeNow()) === 'day', 'choosing 日 puts the room in the day skin')
+const dayBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+
+await page.locator('.skin__btn', { hasText: '夜' }).first().click()
+await sleep(200)
+ok((await themeNow()) === 'night', 'and 夜 puts it in the night skin')
+const nightBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+ok(dayBg !== nightBg, `the two skins really are different surfaces (${dayBg} vs ${nightBg})`)
+
+// Video stays black in both, or the letterboxing glows white around a face.
+const tileBg = await page.evaluate(
+  () => getComputedStyle(document.querySelector('.video-tile')).backgroundColor)
+await page.locator('.skin__btn', { hasText: '日' }).first().click()
+await sleep(200)
+const tileBgDay = await page.evaluate(
+  () => getComputedStyle(document.querySelector('.video-tile')).backgroundColor)
+ok(tileBg === tileBgDay, `the video tile stays the same black in both skins (${tileBgDay})`)
+
+await page.reload()
+await sleep(1500)
+ok((await themeNow()) === 'day', 'and the choice survives a reload')
 
 await browser.close()
 done('UI-LAYOUT')
