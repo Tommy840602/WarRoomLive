@@ -44,7 +44,7 @@ if [ -z "$SUITES" ]; then
   SUITES="signaling room-acl crdt capacity reconnect limits retention"
   running devidp && SUITES="$SUITES oidc"
   running indexer && SUITES="$SUITES events"
-  running minio && SUITES="$SUITES recordings"
+  running minio && SUITES="$SUITES recordings attachments"
   if [ "$ALL" = "1" ]; then
     SUITES="$SUITES crdt-hardening"
     [ "$(replicas backend)" -ge 2 ] && SUITES="$SUITES scale"
