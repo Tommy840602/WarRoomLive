@@ -206,7 +206,7 @@ describe('AgendaPanel', () => {
     expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ id: 1, kind: 'event' }))
   })
 
-  it('switches to the calendar view of the same items', async () => {
+  it('switches to a time grid of the same items', async () => {
     const { container } = panel({
       todos: [todo({ id: 1, text: '沒有時間的事' })],
       events: [event({ id: 1, title: '週會', startsAt: inHours(2) })],
@@ -214,16 +214,22 @@ describe('AgendaPanel', () => {
 
     await act(async () => screen.getByRole('button', { name: '行事曆' }).click())
     expect(screen.getByText('週會')).toBeTruthy()
-    // An undated item cannot be placed on a calendar, so it is counted rather
-    // than quietly dropped.
+    // A grid, not a list: the item is a positioned block on a day column.
+    expect(container.querySelector('.slot')).toBeTruthy()
+    expect(container.querySelectorAll('.grid__column').length).toBeGreaterThan(0)
+    // An undated item cannot be placed on a grid, so it is counted rather than
+    // quietly dropped.
     expect(screen.getByText(/另有 1 個沒有時間的項目/)).toBeTruthy()
     expect(within(container).queryByText('沒有時間的事')).toBeNull()
   })
 
-  it('says so when a calendar has nothing to place', async () => {
-    panel({ todos: [todo({ id: 1, text: '沒有時間的事' })] })
+  it('still draws the grid when nothing is booked, because free time is the answer', async () => {
+    // A list has nothing to show and says so; a calendar showing an empty
+    // Thursday has answered the question.
+    const { container } = panel({ todos: [todo({ id: 1, text: '沒有時間的事' })] })
     await act(async () => screen.getByRole('button', { name: '行事曆' }).click())
-    expect(screen.getByText(/沒有排定時間的項目/)).toBeTruthy()
+    expect(container.querySelectorAll('.grid__column').length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('.slot')).toHaveLength(0)
   })
 
   it('says so when the board is empty', () => {

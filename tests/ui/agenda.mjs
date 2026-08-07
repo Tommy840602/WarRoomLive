@@ -106,18 +106,41 @@ ok((await agenda(alice).locator('.chip--done').count()) >= 1,
 await waitBand(bob, '與法務對齊', '完成')
 ok(true, 'and that reaches the other participant too')
 
-// --- The calendar is the other view of the same items, not another list.
+// --- The calendar is a time grid over the same items, not another list.
 await agenda(alice).getByRole('button', { name: '行事曆' }).click()
-await sleep(400)
-ok(await agenda(alice).locator('.band__label').count() >= 1,
-  'the calendar view groups the same items by day')
-ok((await agenda(alice).locator('.row').allInnerTexts()).some((t) => t.includes('與法務對齊')),
-  'and shows the appointment that was captured on the board')
-// An undated item cannot be placed, so it is counted rather than dropped.
+await sleep(500)
+ok(await agenda(alice).locator('.grid__column').count() >= 1,
+  'the calendar view is a grid of day columns')
+ok((await agenda(alice).locator('.slot').allInnerTexts()).some((t) => t.includes('與法務對齊')),
+  'and the appointment captured on the board is a block on it')
+
+// A block's height is its duration — the thing a list cannot show, and the
+// reason a room can see whether an afternoon is free.
+const spans = await alice.evaluate(() =>
+  [...document.querySelectorAll('[data-panel="agenda"] .slot')]
+    .map((el) => ({ text: el.textContent ?? '', height: el.getBoundingClientRect().height })))
+const hourLong = spans.find((s) => s.text.includes('與法務對齊'))
+ok(hourLong && hourLong.height > 30,
+  `an hour-long appointment is drawn an hour tall (${Math.round(hourLong?.height ?? 0)}px)`)
+
+// The now-line is the one moving thing on the grid; without it the reader has
+// to work out where "now" is from the hour labels.
+ok(await agenda(alice).locator('.grid__now').count() === 1,
+  'today carries a now-line, and only today')
+
+// Paging away from today and back.
+await agenda(alice).getByRole('button', { name: '下一段' }).click()
+await sleep(300)
+ok(await agenda(alice).locator('.grid__now').count() === 0, 'paging forward leaves today behind')
+await agenda(alice).getByRole('button', { name: '今天' }).click()
+await sleep(300)
+ok(await agenda(alice).locator('.grid__now').count() === 1, 'and 今天 brings it back')
+
+// An undated item cannot be placed on a grid, so it is counted rather than dropped.
 await capture(alice, '沒有時間的事')
 await sleep(600)
 ok((await agenda(alice).innerText()).includes('沒有時間的項目'),
-  'undated items are counted, not silently missing from the calendar')
+  'undated items are counted, not silently missing from the grid')
 
 await agenda(alice).getByRole('button', { name: '清單' }).click()
 await sleep(400)

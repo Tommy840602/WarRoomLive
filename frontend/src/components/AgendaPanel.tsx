@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { CalendarEvent, Todo } from '../signaling/types'
 import { parseCapture, relativeTime } from '../agenda/capture'
+import { CalendarGrid } from './CalendarGrid'
 import {
   mergeFeeds,
   sectionsOf,
@@ -188,13 +189,21 @@ export function AgendaPanel({ todos, events, onAdd, onTriage, onDelete }: Agenda
             })}
         </div>
       ) : (
-        <CalendarView
-          items={items}
-          confirming={confirming}
-          onTriage={(item, next) => void run(() => onTriage(item, next))}
-          onDelete={(item) => void remove(item)}
-          onBlurDelete={(item) => setConfirming((key) => (key === item.key ? null : key))}
-        />
+        <>
+          <CalendarGrid
+            items={items}
+            confirming={confirming}
+            onTriage={(item, next) => void run(() => onTriage(item, next))}
+            onDelete={(item) => void remove(item)}
+          />
+          {/* An item with no time cannot be placed on a grid, so say how many
+              are elsewhere rather than letting the agenda look smaller. */}
+          {items.some((item) => !item.at) && (
+            <p className="agenda__empty">
+              另有 {items.filter((item) => !item.at).length} 個沒有時間的項目,在清單檢視。
+            </p>
+          )}
+        </>
       )}
     </section>
   )
@@ -299,69 +308,6 @@ function TriageButton({
       {MARK[triage]}
     </button>
   )
-}
-
-interface CalendarViewProps {
-  items: AgendaItem[]
-  confirming: string | null
-  onTriage: (item: AgendaItem, next: Triage | 'auto') => void
-  onDelete: (item: AgendaItem) => void
-  onBlurDelete: (item: AgendaItem) => void
-}
-
-/**
- * The same items, read by day.
- *
- * Only items with a time appear — a calendar of undated things is a list with
- * extra steps — and the panel says how many are hidden rather than pretending
- * the agenda is smaller than it is.
- */
-function CalendarView({ items, confirming, onTriage, onDelete, onBlurDelete }: CalendarViewProps) {
-  const timed = items.filter((item) => item.at)
-  const undated = items.length - timed.length
-
-  if (timed.length === 0) {
-    return <p className="agenda__empty">沒有排定時間的項目。</p>
-  }
-
-  return (
-    <div className="board">
-      {groupByDay(timed).map(([day, ofDay]) => (
-        <section key={day} className="band">
-          <h3 className="band__label">
-            {day}
-            <span className="band__count tabular">{ofDay.length}</span>
-          </h3>
-          {ofDay.map((item) => (
-            <Row
-              key={item.key}
-              item={item}
-              confirming={confirming === item.key}
-              withDay={false}
-              onTriage={(next) => onTriage(item, next)}
-              onDelete={() => onDelete(item)}
-              onBlurDelete={() => onBlurDelete(item)}
-            />
-          ))}
-        </section>
-      ))}
-      {undated > 0 && (
-        <p className="agenda__empty">另有 {undated} 個沒有時間的項目,在清單檢視。</p>
-      )}
-    </div>
-  )
-}
-
-/** Groups by local day. The list is already in time order, so this preserves it. */
-export function groupByDay(items: AgendaItem[]): [string, AgendaItem[]][] {
-  const byDay = new Map<string, AgendaItem[]>()
-  for (const item of items) {
-    const day = formatDay(item.at as string)
-    const bucket = byDay.get(day)
-    if (bucket) bucket.push(item)
-    else byDay.set(day, [item])
-  }
-  return [...byDay]
 }
 
 /** Today and tomorrow are named, because that is what people call them. */

@@ -79,10 +79,19 @@
 
 驗證:`mvn test`(含 `TriageTest`:`auto` 與缺值等價、未知的字要拒絕、`DONE` 不是可儲存的值)、`frontend npm test`(133 項)、`tests/e2e/run.sh agenda`(triage 的儲存規則:意見會存、`DONE` 變成完成、壞值回 400 且不會讓同一個 PATCH 的其他部分半套生效)、`tests/ui/run.sh agenda`(兩個瀏覽器:一方的 triage 決定另一方看得到,而且不再被標成自動)。
 
-**I. 需要真實環境才能推進(部署層,非程式碼缺口)**
+**I. 行事曆格線與可調版面** ✅ 已完成:
+
+- **行事曆從清單變成時間格線**(`frontend/src/agenda/grid.ts` + `CalendarGrid.tsx`):依日分組的清單答得出「週四有什麼」,答不出「週四下午有沒有空」——空檔沒有列,而區塊之間的縫隙才是找時段的人在讀的東西。`layOutDay` 是純函式:跨午夜的項目在每一天都畫、後面那天標 `continues`;沒有長度的項目給最小高度,但**夾住不讓它長過午夜**(測試抓到的:23:45 的項目原本會溢出到隔天);並排的 lane **以重疊叢集為單位**計算,不是以整天為單位——後者會讓兩場撞期的會議把當天所有區塊都擠成一半寬,讀起來比實際忙得多。
+- **欄數由量出來的寬度決定**,經 `ResizeObserver`,不用媒體查詢:這個面板可以拉,媒體查詢量的是錯的盒子。
+- **版面可拉**(`layout/workspace.ts` + `WorkspaceDivider.tsx`):分隔線可拖曳、可用方向鍵、雙擊回預設;`clampSidebar` 保證拖不到「影像欄為零、連分隔線都消失」的狀態。影像磚另有五段縮放。兩者都存 localStorage、**不走信令平面**——這是 triage 的鏡像,理由也是鏡像的:版面是這個螢幕的偏好,triage 是房間的共識。
+- 兩個測試抓到的缺陷:`Number('')` 是 0 而且是有限的,所以空字串會被當成合法的寬度 0;以及分隔線的 window listener 依賴當前寬度,每次 pointermove 都重跑 effect、而 cleanup 會結束拖曳——**分隔線移動一步就放手了**,截圖才看得出來。
+
+驗證:`frontend npm test`(184 項;`grid.ts` 23 項含跨午夜、夾住、叢集 lane,`workspace.ts` 15 項含儲存的壞值)、`tests/ui/run.sh layout agenda`(真的拖得動、影像讓出寬度、重整後記得、方向鍵也能動;一小時的約會畫成一小時高、現在線只在今天、翻頁後消失而「今天」把它帶回來)。
+
+**J. 需要真實環境才能推進(部署層,非程式碼缺口)**
 真實 IdP(Keycloak/Entra)對接演練、Slack/PagerDuty 告警接收端、TURN/TLS 443 真憑證、跨區域備份複寫與 KMS、目標環境的藍圖級工作負載(20k 連線)。
 
-**J. 等規模需求出現再做**
+**K. 等規模需求出現再做**
 Redis Cluster(資料分片;可用性已由 Sentinel 覆蓋)、OpenSearch 取代 Postgres FTS、部門/專案層級 ACL(需組織目錄整合)。
 
 ## 原則(照藍圖)
