@@ -1,5 +1,11 @@
 import { SignalingClient } from '../signaling/SignalingClient'
 import type { PeerInfo, SignalMessage } from '../signaling/types'
+import {
+  QualityTracker,
+  sampleConnection,
+  type PeerQuality,
+  type RtpCounters,
+} from './quality'
 
 export interface WebRtcRoomEvents {
   /** A remote peer's media stream became available (or was replaced). */
@@ -8,7 +14,15 @@ export interface WebRtcRoomEvents {
   onPeerLeft: (peerId: string) => void
   /** Non-fatal signaling error surfaced by the server. */
   onError?: (reason: string) => void
+  /** Periodic per-peer link quality, for the connection indicator. */
+  onQuality?: (peerId: string, quality: PeerQuality) => void
 }
+
+/** How often each link is measured. */
+const QUALITY_INTERVAL_MS = 2000
+/** Ceiling applied to outgoing video for a peer whose link is struggling. */
+const DEGRADED_MAX_BITRATE = 150_000
+const DEGRADED_SCALE_DOWN = 2
 
 /**
  * Full-mesh WebRTC session for one room.
@@ -20,6 +34,11 @@ export interface WebRtcRoomEvents {
  */
 export class WebRtcRoom {
   private readonly peers = new Map<string, RTCPeerConnection>()
+  private readonly quality = new QualityTracker()
+  /** Previous cumulative RTP counters per peer, so loss is measured per window. */
+  private readonly counters = new Map<string, RtpCounters>()
+  private qualityTimer?: ReturnType<typeof setInterval>
+  private room = ''
 
   /** The original camera video track — kept so screen sharing can be reverted. */
   readonly cameraVideoTrack: MediaStreamTrack | null
@@ -63,13 +82,80 @@ export class WebRtcRoom {
     this.signaling.on('candidate', (msg) => this.onCandidate(msg))
     this.signaling.on('error', (msg) => this.events.onError?.(String(msg.payload)))
 
+    this.room = room
     this.signaling.send({ type: 'join', room, from: this.selfId, payload: displayName })
+    this.qualityTimer ??= setInterval(() => void this.measure(), QUALITY_INTERVAL_MS)
   }
 
   leave(room: string): void {
     this.signaling.send({ type: 'leave', room, from: this.selfId })
+    clearInterval(this.qualityTimer)
+    this.qualityTimer = undefined
     this.peers.forEach((pc) => pc.close())
     this.peers.clear()
+    this.quality.clear()
+    this.counters.clear()
+  }
+
+  /**
+   * Measures every link and adjusts what we send on it. Degradation is applied
+   * per peer, not globally: one participant on hotel Wi-Fi should not cost
+   * everyone else their video quality.
+   */
+  private async measure(): Promise<void> {
+    for (const [peerId, pc] of this.peers) {
+      if (pc.connectionState !== 'connected') continue
+      const { sample, counters } = await sampleConnection(pc, this.counters.get(peerId))
+      this.counters.set(peerId, counters)
+      const before = this.quality.get(peerId)?.degraded ?? false
+      const quality = this.quality.record(peerId, sample)
+      this.events.onQuality?.(peerId, quality)
+      if (quality.degraded !== before) {
+        await this.applyVideoLimit(pc, quality.degraded)
+      }
+    }
+  }
+
+  /** Caps (or releases) the outgoing video encoding for one peer connection. */
+  private async applyVideoLimit(pc: RTCPeerConnection, degraded: boolean): Promise<void> {
+    const sender = pc.getSenders().find((s) => s.track?.kind === 'video')
+    if (!sender) return
+    const parameters = sender.getParameters()
+    // Firefox hands back parameters without encodings until the first setParameters.
+    parameters.encodings = parameters.encodings?.length ? parameters.encodings : [{}]
+    for (const encoding of parameters.encodings) {
+      if (degraded) {
+        encoding.maxBitrate = DEGRADED_MAX_BITRATE
+        encoding.scaleResolutionDownBy = DEGRADED_SCALE_DOWN
+      } else {
+        delete encoding.maxBitrate
+        delete encoding.scaleResolutionDownBy
+      }
+    }
+    try {
+      await sender.setParameters(parameters)
+    } catch (e) {
+      console.warn('Could not adjust outgoing video quality', e)
+    }
+  }
+
+  /**
+   * Re-negotiates ICE for a connection the browser gave up on — a network
+   * change (Wi-Fi to cellular) invalidates the candidates without the peers
+   * going anywhere. Only one side may restart, or the two offers collide:
+   * the lower peer id does it, an arbitrary but stable tie-break.
+   */
+  private async restartIce(peerId: string, pc: RTCPeerConnection): Promise<void> {
+    if (this.selfId > peerId) return
+    try {
+      const offer = await pc.createOffer({ iceRestart: true })
+      await pc.setLocalDescription(offer)
+      this.signaling.send({
+        type: 'offer', room: this.room, from: this.selfId, to: peerId, payload: offer,
+      })
+    } catch (e) {
+      console.warn(`ICE restart for ${peerId} failed`, e)
+    }
   }
 
   /**
@@ -85,6 +171,8 @@ export class WebRtcRoom {
       this.events.onPeerLeft(peerId)
     })
     this.peers.clear()
+    this.quality.clear()
+    this.counters.clear()
   }
 
   // --- signaling handlers ---------------------------------------------------
@@ -110,6 +198,8 @@ export class WebRtcRoom {
     if (!peerId) return
     this.peers.get(peerId)?.close()
     this.peers.delete(peerId)
+    this.quality.forget(peerId)
+    this.counters.delete(peerId)
     this.events.onPeerLeft(peerId)
   }
 
@@ -166,6 +256,14 @@ export class WebRtcRoom {
     pc.ontrack = (event) => {
       const [stream] = event.streams
       if (stream) this.events.onRemoteStream(peerId, stream)
+    }
+    pc.onconnectionstatechange = () => {
+      // 'failed' is not the peer leaving — the signaling plane would have said
+      // so. It usually means the path died under us (a network change), which
+      // fresh candidates can recover without anyone rejoining.
+      if (pc.connectionState === 'failed') {
+        void this.restartIce(peerId, pc)
+      }
     }
 
     this.peers.set(peerId, pc)

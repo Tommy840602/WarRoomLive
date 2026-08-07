@@ -19,6 +19,7 @@ import { MemberList, type Member } from './components/MemberList'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
 import type { MediaState, PeerInfo, RoomStateInfo, StoredMessage } from './signaling/types'
+import type { PeerQuality } from './webrtc/quality'
 import { useAuth } from './auth/AuthGate'
 import './App.css'
 
@@ -59,6 +60,7 @@ export default function App() {
   const [recordingId, setRecordingId] = useState<string | null>(null)
   const [roomState, setRoomState] = useState<RoomStateInfo>({ host: '', locked: false })
   const [connection, setConnection] = useState<ConnectionState>('closed')
+  const [peerQuality, setPeerQuality] = useState<Map<string, PeerQuality>>(new Map())
 
   const clientRef = useRef<SignalingClient | null>(null)
   const roomRef = useRef<MediaRoom | null>(null)
@@ -105,6 +107,8 @@ export default function App() {
       audioOff: peerStates.get(id)?.audio === false,
       videoOff: peerStates.get(id)?.video === false,
       handRaised: raisedHands.has(id),
+      quality: peerQuality.get(id)?.level,
+      degraded: peerQuality.get(id)?.degraded,
     })),
   ]
 
@@ -129,6 +133,7 @@ export default function App() {
     setRemoteStreams(new Map())
     setNames(new Map())
     setPeerStates(new Map())
+    setPeerQuality(new Map())
     setMessages([])
     setScreenSharing(false)
     setAudioEnabled(true)
@@ -157,6 +162,7 @@ export default function App() {
     roomRef.current?.handleReconnect()
     setPeerStates(new Map())
     setRaisedHands(new Set())
+    setPeerQuality(new Map())
 
     client.send({
       type: 'join',
@@ -220,6 +226,11 @@ export default function App() {
         })
         setRaisedHands((prev) => {
           const next = new Set(prev)
+          next.delete(msg.from!)
+          return next
+        })
+        setPeerQuality((prev) => {
+          const next = new Map(prev)
           next.delete(msg.from!)
           return next
         })
@@ -289,6 +300,8 @@ export default function App() {
             return next
           }),
         onError: (reason: string) => setError(reason),
+        onQuality: (peerId: string, quality: PeerQuality) =>
+          setPeerQuality((prev) => new Map(prev).set(peerId, quality)),
       }
 
       const displayName = name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`

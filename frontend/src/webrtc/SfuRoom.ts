@@ -1,7 +1,9 @@
 import {
+  ConnectionQuality,
   Room,
   RoomEvent,
   Track,
+  type Participant,
   type RemoteParticipant,
   type RemoteTrack,
 } from 'livekit-client'
@@ -64,6 +66,11 @@ export class SfuRoom implements MediaRoom {
           this.remoteStreams.delete(participant.identity)
           this.events.onPeerLeft(participant.identity)
         })
+        // The SFU already judges each participant's link; map its verdict onto
+        // the same shape the mesh path computes, so the UI has one language.
+        .on(RoomEvent.ConnectionQualityChanged, (quality, participant) =>
+          this.onQualityChanged(quality, participant),
+        )
 
       await this.room.connect(this.livekit.url, this.livekit.token)
 
@@ -79,6 +86,21 @@ export class SfuRoom implements MediaRoom {
     } catch (e) {
       this.events.onError?.(`SFU 連線失敗:${e instanceof Error ? e.message : String(e)}`)
     }
+  }
+
+  private onQualityChanged(quality: ConnectionQuality, participant: Participant): void {
+    const level = quality === ConnectionQuality.Excellent || quality === ConnectionQuality.Good
+      ? 'good'
+      : quality === ConnectionQuality.Poor
+        ? 'poor'
+        : 'fair'
+    // No degradation to apply here: adaptiveStream and dynacast already adjust
+    // what the SFU sends, which is the whole point of publishing once.
+    this.events.onQuality?.(participant.identity, {
+      level,
+      degraded: false,
+      lastSample: { lossRatio: 0 },
+    })
   }
 
   private onTrackSubscribed(track: RemoteTrack, participant: RemoteParticipant): void {

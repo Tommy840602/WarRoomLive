@@ -1,3 +1,5 @@
+import type { QualityLevel } from '../webrtc/quality'
+
 export interface Member {
   id: string
   name: string
@@ -5,6 +7,16 @@ export interface Member {
   audioOff?: boolean
   videoOff?: boolean
   handRaised?: boolean
+  /** Link quality to this participant; absent until the first measurement. */
+  quality?: QualityLevel
+  /** True while we are holding back the video we send them. */
+  degraded?: boolean
+}
+
+const QUALITY_LABEL: Record<QualityLevel, string> = {
+  good: '連線良好',
+  fair: '連線普通',
+  poor: '連線不佳',
 }
 
 interface MemberListProps {
@@ -40,6 +52,15 @@ export function MemberList({ members, hostId, locked, canKick, onKick }: MemberL
               {m.isSelf && <span className="members__you">(你)</span>}
             </span>
             <span className="members__status">
+              {m.quality && (
+                <span
+                  className={`members__signal members__signal--${m.quality}`}
+                  aria-label={QUALITY_LABEL[m.quality] + (m.degraded ? '(已降低畫質)' : '')}
+                  title={QUALITY_LABEL[m.quality] + (m.degraded ? '——已自動降低送出的畫質' : '')}
+                >
+                  {m.degraded ? '▂' : m.quality === 'good' ? '▂▄▆' : m.quality === 'fair' ? '▂▄' : '▂'}
+                </span>
+              )}
               {m.handRaised && <span aria-label="舉手">✋</span>}
               {m.audioOff && <span aria-label="靜音">🔇</span>}
               {m.videoOff && <span aria-label="關閉視訊">📷</span>}

@@ -592,3 +592,20 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+.members__signal {
+  font-family: monospace;
+  letter-spacing: -1px;
+}
+
+.members__signal--good {
+  color: #4ade80;
+}
+
+.members__signal--fair {
+  color: #fbbf24;
+}
+
+.members__signal--poor {
+  color: #f87171;
+}
