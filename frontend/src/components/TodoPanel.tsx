@@ -1,28 +1,37 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Todo } from '../signaling/types'
+import { parseCapture, relativeTime, urgencyOf } from '../agenda/capture'
 
 interface TodoPanelProps {
   todos: Todo[]
+  /** Takes what the line parsed into; the server still validates all of it. */
   onAdd: (text: string, assignee: string, dueAt: string) => Promise<void>
   onToggle: (id: number, done: boolean) => Promise<void>
   onDelete: (id: number) => Promise<void>
 }
 
 /**
- * The room's shared to-do list.
+ * The room's shared list.
  *
- * <p>The server orders it — open items first, then soonest-due — so this
- * renders what it is given rather than sorting again. Two clients sorting the
- * same list by different rules is how two people end up talking about different
- * "first" items.
+ * Captured as one line rather than a form, because this is filled in while
+ * someone is still talking — `寄簡報 @bob 明天15:00` is how the sentence was
+ * said, and tabbing through four fields is not something anyone does mid-call.
+ * What the line understood is shown back before it is sent, so the parse is
+ * never a guess the user finds out about later.
+ *
+ * Ordering is the server's (open first, soonest-due, undated last) and is not
+ * re-sorted here: two clients sorting differently is how two people end up
+ * discussing different "first" items.
  */
 export function TodoPanel({ todos, onAdd, onToggle, onDelete }: TodoPanelProps) {
-  const [text, setText] = useState('')
-  const [assignee, setAssignee] = useState('')
-  const [due, setDue] = useState('')
+  const [line, setLine] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<number | null>(null)
+
+  // Re-parsed on every keystroke so the preview cannot disagree with what will
+  // be sent — one parse, one source of truth.
+  const parsed = useMemo(() => parseCapture(line), [line])
 
   const run = async (action: () => Promise<void>) => {
     setError(null)
@@ -34,13 +43,11 @@ export function TodoPanel({ todos, onAdd, onToggle, onDelete }: TodoPanelProps) 
   }
 
   const add = async () => {
-    if (!text.trim()) return
+    if (!parsed.text) return
     setBusy(true)
     await run(async () => {
-      await onAdd(text.trim(), assignee.trim(), due)
-      setText('')
-      setAssignee('')
-      setDue('')
+      await onAdd(parsed.text, parsed.assignee ?? '', parsed.dueAt ?? '')
+      setLine('')
     })
     setBusy(false)
   }
@@ -57,107 +64,94 @@ export function TodoPanel({ todos, onAdd, onToggle, onDelete }: TodoPanelProps) 
   const open = todos.filter((t) => !t.done).length
 
   return (
-    <aside className="todos">
-      <h2 className="todos__title">待辦 ({open}/{todos.length})</h2>
+    <section className="agenda">
+      <header className="agenda__head">
+        <h2 className="agenda__title">待辦</h2>
+        <span className="agenda__count tabular">
+          {open} 未完成{todos.length > open && ` · ${todos.length - open} 已完成`}
+        </span>
+      </header>
 
       <form
-        className="todos__form"
+        className="capture"
         onSubmit={(e) => {
           e.preventDefault()
           void add()
         }}
       >
         <input
-          className="todos__text"
-          value={text}
-          placeholder="要做什麼"
-          aria-label="待辦事項"
-          onChange={(e) => setText(e.target.value)}
+          className="capture__line"
+          value={line}
+          placeholder="要做什麼…  @負責人  明天15:00"
+          aria-label="新增待辦"
+          onChange={(e) => setLine(e.target.value)}
         />
-        <div className="todos__row">
-          <input
-            className="todos__assignee"
-            value={assignee}
-            placeholder="負責人(選填)"
-            aria-label="負責人"
-            onChange={(e) => setAssignee(e.target.value)}
-          />
-          <input
-            className="todos__due"
-            type="datetime-local"
-            value={due}
-            aria-label="期限"
-            onChange={(e) => setDue(e.target.value)}
-          />
-          <button type="submit" disabled={busy || !text.trim()}>
-            新增
-          </button>
-        </div>
+        <button className="capture__go" type="submit" disabled={busy || !parsed.text}>
+          加入
+        </button>
       </form>
 
-      {error && <p className="todos__error">⚠️ {error}</p>}
+      {/* Shown only once something was lifted out of the line, so an ordinary
+          item adds no chrome. */}
+      {(parsed.assignee || parsed.dueAt) && (
+        <p className="capture__read">
+          <span className="capture__read-label">解讀為</span>
+          <span className="capture__read-text">{parsed.text}</span>
+          {parsed.assignee && <span className="chip chip--who">@{parsed.assignee}</span>}
+          {parsed.dueAt && (
+            <span className="chip chip--soon tabular" title={new Date(parsed.dueAt).toLocaleString()}>
+              {relativeTime(parsed.dueAt)}
+            </span>
+          )}
+        </p>
+      )}
 
-      <ul className="todos__list">
-        {todos.map((todo) => (
-          <li key={todo.id} className={`todos__item${todo.done ? ' todos__item--done' : ''}`}>
-            <input
-              type="checkbox"
-              checked={todo.done}
-              aria-label={`完成 ${todo.text}`}
-              onChange={(e) => void run(() => onToggle(todo.id, e.target.checked))}
-            />
-            <span className="todos__meta">
-              <span className="todos__body">{todo.text}</span>
-              <span className="todos__detail">
-                {todo.assignee && <span className="todos__who">@{todo.assignee}</span>}
-                {todo.dueAt && (
-                  <span className={dueClass(todo)}>{formatDue(todo.dueAt)}</span>
-                )}
+      {error && <p className="agenda__error">{error}</p>}
+      {todos.length === 0 && <p className="agenda__empty">還沒有待辦。說了什麼要做的,就記在這裡。</p>}
+
+      <ul className="agenda__list">
+        {todos.map((todo) => {
+          const urgency = urgencyOf(todo.dueAt, todo.done)
+          return (
+            <li key={todo.id} className={`row${todo.done ? ' row--done' : ''}`}>
+              <input
+                className="row__check"
+                type="checkbox"
+                checked={todo.done}
+                aria-label={`完成 ${todo.text}`}
+                onChange={(e) => void run(() => onToggle(todo.id, e.target.checked))}
+              />
+
+              {/* The time rail: every row leads with how far off it is, in the
+                  same column, so the list can be read down rather than across. */}
+              <span
+                className={`row__when tabular row__when--${urgency}`}
+                title={todo.dueAt ? new Date(todo.dueAt).toLocaleString() : undefined}
+              >
+                {todo.dueAt ? relativeTime(todo.dueAt) : '—'}
+              </span>
+
+              <span className="row__body">
+                <span className="row__text">{todo.text}</span>
+                {todo.assignee && <span className="chip chip--who">@{todo.assignee}</span>}
                 {todo.done && todo.completedBy && (
-                  <span className="todos__by">✓ {todo.completedBy}</span>
+                  <span className="chip chip--done">✓ {todo.completedBy}</span>
                 )}
               </span>
-            </span>
-            <button
-              className="todos__delete"
-              aria-label={`刪除 ${todo.text}`}
-              title={confirming === todo.id ? '再按一次確認刪除' : '刪除'}
-              onClick={() => void remove(todo.id)}
-              onBlur={() => setConfirming((id) => (id === todo.id ? null : id))}
-            >
-              {confirming === todo.id ? '確認刪除' : '🗑'}
-            </button>
-          </li>
-        ))}
+
+              <button
+                className="row__drop"
+                aria-label={`刪除 ${todo.text}`}
+                title={confirming === todo.id ? '再按一次確認刪除' : '刪除'}
+                onClick={() => void remove(todo.id)}
+                onBlur={() => setConfirming((id) => (id === todo.id ? null : id))}
+              >
+                {confirming === todo.id ? '確認' : '×'}
+              </button>
+            </li>
+          )
+        })}
       </ul>
-    </aside>
+    </section>
   )
-}
-
-/** Overdue only matters while the item is still open — a finished one is not late. */
-export function dueClass(todo: Pick<Todo, 'done' | 'dueAt'>): string {
-  const overdue = !todo.done && todo.dueAt !== undefined && new Date(todo.dueAt) < new Date()
-  return overdue ? 'todos__due-at todos__due-at--overdue' : 'todos__due-at'
-}
-
-export function formatDue(iso: string): string {
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return iso
-  return date.toLocaleString(undefined, {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-/**
- * `datetime-local` gives a wall-clock string with no zone. The browser's own
- * zone is the only sensible reading of what the user typed, and the server
- * stores instants — so it is converted here rather than sent as-is.
- */
-export function localInputToInstant(value: string): string {
-  if (!value) return ''
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '' : date.toISOString()
 }

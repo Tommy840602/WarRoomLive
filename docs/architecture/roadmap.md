@@ -59,10 +59,18 @@
 
 驗證:`mvn test`、`frontend npm test`(TodoPanel / CalendarPanel 含逾期判定、時區轉換、分組不重排)、`tests/e2e/run.sh agenda`、`tests/ui/run.sh agenda`(兩個瀏覽器:一方新增另一方**不用重整**就看到、排序一致、勾選後沉到底)。
 
-**G. 需要真實環境才能推進(部署層,非程式碼缺口)**
+**G. 版面與外觀** ✅ 已完成:F 交出來的待辦/行事曆長得像 Jira 的表單——四個欄位、絕對時間、七個面板擠在同一條側欄。兩件事一起改。
+
+- **一行輸入**(`frontend/src/agenda/capture.ts`):`寄簡報 @bob 明天15:00` 解析成 `{text, assignee, dueAt}`。唯一不變式是**認不出來的字留在文字裡**——連「認出來但不合法」的(`25:00`、`2/31`)也放回去,而不是默默吞掉。送出前把「解讀為」顯示回去(preview 與送出共用同一個 `useMemo`,所以兩者不可能講不一樣的話)。伺服器仍然全部驗證——這是打字的便利,不是信任邊界。踩到的坑:JS 的 `\b` 只認 ASCII,`15點` 後面沒有邊界,時間 pattern 改用明確的 lookaround。
+- **面板一次開一個,任何寬度都一樣**:原本頁籤只在窄螢幕出現,桌面版七個面板疊在 320px 側欄裡,每個都只分到一條縫。`sidebarPanels` 由實際渲染出來的面板推導,頁籤不會切到空白。
+- **日夜主題**(`frontend/src/theme/`):`resolveTheme()` 是純函式、可單測;`useTheme` 把 `data-theme` 與 `color-scheme` 掛上 `<html>`,計時器**瞄準下一個交界**(07:00/19:00)而不是輪詢,另外聽 `matchMedia` 與 `visibilitychange`(筆電睡過黃昏,計時器根本沒機會響)。作業系統偏好**刻意不對稱**:`dark` 壓過時鐘(那是使用者主動選的),`light` 讓給時鐘(那是什麼都沒設定時的回報值,不算表態)。`App.css` 裡的顏色全部換成 token,否則兩套外觀會一條規則一條規則地走鐘;`--tile-bg`/`--on-tile` 在兩套裡刻意相同——影像就是影像,黑色遮罩上的名牌不能跟著頁面的墨色跑。`--skin-fade` 的 `none` 必須寫在 `prefers-reduced-motion` 查詢**之前**,反過來的話同分比後者贏,淡入淡出就會靜靜地死掉。
+
+驗證:`frontend npm test`(100 項:capture 解析與復原、theme 解析與下一個交界、兩個面板的行為)、`tests/ui/run.sh layout agenda`(一行輸入真的把負責人與期限送上線;兩套外觀確實是不同的底色、影像磚兩邊都是黑的、手動選擇撐得過重整)。
+
+**H. 需要真實環境才能推進(部署層,非程式碼缺口)**
 真實 IdP(Keycloak/Entra)對接演練、Slack/PagerDuty 告警接收端、TURN/TLS 443 真憑證、跨區域備份複寫與 KMS、目標環境的藍圖級工作負載(20k 連線)。
 
-**H. 等規模需求出現再做**
+**I. 等規模需求出現再做**
 Redis Cluster(資料分片;可用性已由 Sentinel 覆蓋)、OpenSearch 取代 Postgres FTS、部門/專案層級 ACL(需組織目錄整合)。
 
 ## 原則(照藍圖)
