@@ -6,11 +6,12 @@
 
 | 平面 | 藍圖建議 | 目前實作 | 差距 |
 |---|---|---|---|
-| 媒體 | LiveKit SFU + coturn | 模式切換:預設 mesh(≤8),SFU 疊加層走 LiveKit(上限 50) | 尚無 coturn/TURN fallback、simulcast 調優 |
-| 業務事件 | Spring WebSocket(STOMP)+ Redis/Kafka backplane | 自訂 JSON envelope(`SignalMessage`)單節點 | 單節點夠用;水平擴展需 backplane |
-| 共同編輯 | TipTap/ProseMirror + Yjs + Hocuspocus + Postgres | ✅ 同組合:`collab/` 服務,快照落 `collab_document` | 尚未做 update log / snapshot compaction |
-| 持久化 | PostgreSQL 為 source of truth | 聊天(`chat_message`)與筆記快照(`collab_document`)入 Postgres | 無 Flyway、無 outbox |
-| 前端 | Vue 3 生態系 + Konva 白板 | React 18(既有投資,不重寫)+ Konva 白板 ✅ | 刻意偏離框架;白板已落地(筆畫/便利貼 durable、游標/進行中筆畫 ephemeral) |
+| 媒體 | LiveKit SFU + coturn | 模式切換:預設 mesh(≤8),SFU 疊加層走 LiveKit(上限 50);simulcast + adaptiveStream + dynacast;coturn TURN fallback;Egress 錄影 → MinIO;**每對等連線品質量測與弱網降級、ICE 重啟** | TURN/TLS 443 需真實憑證(部署層);錄影無播放介面 |
+| 業務事件 | Spring WebSocket(STOMP)+ Redis/Kafka backplane | 自訂 JSON envelope(`SignalMessage`);`Backplane` 抽象(單機 / Redis pub-sub + Sentinel HA);transactional outbox → Redpanda + schema registry;**斷線自動重連與重新加入** | **無速率/大小限制**(見下方演進順序 9) |
+| 共同編輯 | TipTap/ProseMirror + Yjs + Hocuspocus + Postgres | ✅ 同組合:`collab/` 服務;update log + debounce 快照 compaction;訊息/文件/速率三重上限;多實例經 Redis 同步 | — |
+| 持久化 | PostgreSQL 為 source of truth | 聊天、筆記快照、outbox、稽核與搜尋讀模型、會議領域皆入 Postgres;Flyway 管 schema(V1–V5);WAL 歸檔 + PITR + 加密物件儲存歸檔 | 跨區域複寫、KMS(部署層) |
+| 前端 | Vue 3 生態系 + Konva 白板 | React 18(既有投資,不重寫)+ Konva 白板 ✅ | 刻意偏離框架 |
+| 測試 | (藍圖未細談) | 三層:vitest 單元(CI)、`tests/e2e/` 黑箱、`tests/ui/` 真實瀏覽器;另有壓測/混沌/DR/HA 演練 | 目標環境的藍圖級工作負載(20k 連線) |
 
 ## 演進順序(建議)
 
@@ -24,6 +25,22 @@
 7. **壓測與混沌** ✅(藍圖 §十):`tests/load/` k6 信令壓測(SLO 門檻化,400 VU/1.3k msg/s 全綠;首輪即抓到並修復兩個廣播併發競態)+ `tests/chaos/` Toxiproxy(延遲注入無丟失、斷線後成員清理與重連)。詳見 `docs/runbooks/load-testing.md`。**LiveKit RTC 負載測試 ✅**(`tests/load/rtc-load.sh`,3 發布者/9 訂閱者 30 秒:27/27 軌道、21.5mbps、0% 丟包,simulcast 分層可見)+ **Yjs replay 壓測 ✅**(`tests/load/crdt-replay.mjs`,壓縮前/後兩階段對照:重建成本由 log 列數而非文件大小主導——20000 字壓縮後 0.3ms vs 5000 字帶 200 列未壓縮 log 的 4.5ms)。尚餘:目標環境的藍圖級工作負載(20k 連線)。
 
 8. **備份與 DR** ✅(藍圖 §十一,本機形態):backup 疊加層(WAL 歸檔)+ `tests/dr/` 一鍵 PITR 還原演練(災前/災後標記、CRDT snapshot⊕log 重建 hash 比對;首次演練即抓到歸檔權限缺陷並修復)。詳見 `docs/runbooks/disaster-recovery.md`。**物件儲存歸檔 + 備份加密 ✅**(`docker-compose.backup-s3.yml`:rclone shipper 經 `crypt` remote 客戶端加密同步進 MinIO,`tests/dr/restore-s3-drill.sh` 只從 bucket 還原並斷言 bucket 內無明文路徑;演練抓到「物件儲存丟失空目錄導致還原叢集拒啟動」,改用 tar 格式基礎備份修復)。尚餘:跨區域複寫、金鑰管理服務接入(部署層)。
+
+9. **連線韌性與測試分層** ✅:信令 `SignalingClient` 指數退避重連(每次重讀 URL 以帶上更新過的 token;**被踢 4403 與主動離開永不重試**),恢復後重新 join + 重播媒體/舉手狀態、依伺服器成員清單重建(mesh 重建 peer connection、SFU 不動);伺服器端修掉「被取代的 session 遲到 close 會踢掉活著的連線」競態。**每對等連線品質**(`getStats` 量 RTT/視窗丟包/抖動)在成員名單顯示,持續不佳只降該對等的視訊,恢復比降級慢以免抖動;`failed` 時由較小 peer id 單方發起 ICE 重啟。**測試分三層**:純邏輯與策略進 vitest(CI 唯一會跑的前端測試)、`tests/e2e/` 黑箱、`tests/ui/` 真實瀏覽器(音訊是否真的出得來、編輯器是否接上文件、控制項是否只給對的人)。
+
+## 後續(依價值排序)
+
+**A. 信令平面的濫用防護(唯一還沒做的核心工程項)**
+CRDT 平面有三重上限(單筆 512 KB、文件 5 MB、每連線 120/s),**信令平面一個都沒有**。單一客戶端可以灌爆 socket,或送出任意大小的聊天訊息直接寫進 Postgres。需要:每連線 token bucket、訊息與聊天內容長度上限、超限的處置(丟棄或斷線)與對應指標。這個不對稱是目前最明確的缺口。
+
+**B. 錄影播放介面**
+錄好的 MP4 進了 MinIO,但應用內沒有列出或播放的地方——目前只能到物件儲存翻檔案。需要:會議錄影清單(以 `meeting.recording.completed` 事件為來源)與簽名 URL 播放。
+
+**C. 需要真實環境才能推進(部署層,非程式碼缺口)**
+真實 IdP(Keycloak/Entra)對接演練、Slack/PagerDuty 告警接收端、TURN/TLS 443 真憑證、跨區域備份複寫與 KMS、目標環境的藍圖級工作負載(20k 連線)。
+
+**D. 等規模需求出現再做**
+Redis Cluster(資料分片;可用性已由 Sentinel 覆蓋)、OpenSearch 取代 Postgres FTS、部門/專案層級 ACL(需組織目錄整合)。
 
 ## 原則(照藍圖)
 
