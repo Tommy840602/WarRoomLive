@@ -3,12 +3,9 @@ package com.warroomlive.web;
 import com.warroomlive.recordings.RecordingEntity;
 import com.warroomlive.recordings.RecordingStore;
 import com.warroomlive.recordings.S3Presigner;
-import com.warroomlive.signaling.Backplane;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -22,7 +19,6 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * Lists a room's finished recordings and hands out short-lived playback URLs.
@@ -47,7 +43,7 @@ public class RecordingLibraryController {
     private static final int MAX_LIMIT = 200;
 
     private final ObjectProvider<RecordingStore> recordings;
-    private final Backplane backplane;
+    private final RoomAuthorization authorization;
     private final String bucket;
     private final String accessKey;
     private final String secretKey;
@@ -57,14 +53,14 @@ public class RecordingLibraryController {
 
     public RecordingLibraryController(
             ObjectProvider<RecordingStore> recordings,
-            Backplane backplane,
+            RoomAuthorization authorization,
             @Value("${warroomlive.media.egress-s3-endpoint:}") String endpoint,
             @Value("${warroomlive.media.egress-s3-bucket:}") String bucket,
             @Value("${warroomlive.media.egress-s3-access-key:}") String accessKey,
             @Value("${warroomlive.media.egress-s3-secret-key:}") String secretKey,
             @Value("${warroomlive.media.recording-path-prefix:/recordings}") String publicPrefix) {
         this.recordings = recordings;
-        this.backplane = backplane;
+        this.authorization = authorization;
         this.bucket = bucket;
         this.accessKey = accessKey;
         this.secretKey = secretKey;
@@ -134,52 +130,18 @@ public class RecordingLibraryController {
     public Map<String, Object> delete(@PathVariable String room, @PathVariable long id) {
         // Authorization first, deliberately: a 404 from the lookup would tell a
         // caller who may not delete whether the recording exists at all.
-        requireHostIfKnown(room);
+        authorization.requireHostIfKnown(room, "delete a room's recordings");
         RecordingEntity recording = store().byId(id)
                 .filter(r -> r.getRoom().equals(room))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "no such recording"));
-        if (!store().delete(recording, "manual", caller())) {
+        if (!store().delete(recording, "manual", authorization.caller())) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     "the recording's object could not be removed; nothing was deleted");
         }
         return Map.of("id", id, "deleted", true);
     }
 
-    /**
-     * Refuses the caller when the room has a host with a known identity and the
-     * caller is not that person.
-     *
-     * <p>Deliberately silent when the host's subject is unknown: that means
-     * either an empty room or a deployment with no identity provider, and in
-     * neither case is there anything to compare against. Inventing a refusal
-     * there would break the zero-dependency default without protecting anyone.
-     */
-    private void requireHostIfKnown(String room) {
-        Backplane.RoomState state = backplane.roomState(room);
-        if (state.hostId() == null) {
-            return;
-        }
-        Optional<String> hostSubject = backplane.subjectOf(room, state.hostId());
-        if (hostSubject.isEmpty()) {
-            return;
-        }
-        if (!hostSubject.get().equals(caller())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "only the room's host may delete its recordings");
-        }
-    }
 
-    /**
-     * The authenticated subject, or {@code anonymous} when the app runs without
-     * auth. Spring's own anonymous principal is called {@code anonymousUser},
-     * which would end up in audit events and on screen; one name for "nobody" is
-     * enough.
-     */
-    private static String caller() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        String name = auth == null ? null : auth.getName();
-        return name == null || name.equals("anonymousUser") ? "anonymous" : name;
-    }
 
     private RecordingStore store() {
         RecordingStore store = recordings.getIfAvailable();

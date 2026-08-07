@@ -20,6 +20,7 @@ export type SignalType =
   | 'kicked'
   | 'room-state'
   | 'attachment'
+  | 'agenda'
   | 'room-full'
   | 'room-locked'
   | 'error'
@@ -59,6 +60,33 @@ export interface Attachment {
   sizeBytes: number
   uploadedBy: string
   uploadedAt: string
+}
+
+/** One item on the room's shared to-do list. */
+export interface Todo {
+  id: number
+  room: string
+  text: string
+  done: boolean
+  assignee?: string
+  /** ISO-8601 instant. */
+  dueAt?: string
+  createdBy: string
+  createdAt: string
+  completedAt?: string
+  completedBy?: string
+}
+
+/** One entry on the room's shared calendar. Times are ISO-8601 instants. */
+export interface CalendarEvent {
+  id: number
+  room: string
+  title: string
+  description: string
+  startsAt: string
+  endsAt?: string
+  createdBy: string
+  createdAt: string
 }
 
 /** A persisted chat message, carried in the `history` message on join. */

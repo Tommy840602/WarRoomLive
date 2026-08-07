@@ -33,7 +33,7 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
 - **濫用防護(三個平面對稱)**:信令平面有每連線 token bucket(預設 60/s,允許 2 倍突發,所以「加入房間 + 一連串 ICE candidate」不會被誤擋)、容器層的訊框上限(64 KB)、以及聊天長度上限(4000 字,**在寫入資料庫之前**檢查);CRDT 平面本來就有訊息速率/單筆更新/文件大小三重上限;HTTP API 用同一個 token bucket 以來源位址計(預設 20/s + 2 倍突發)。處置方式依意圖不同:信令超速**丟棄該訊息**(突發多半是程式錯誤或網路問題,斷線會連帶讓聊天、presence、協商一起死)、過長聊天**明確回錯**(絕不截斷——發送者必須知道沒送出去)、超大訊框由容器直接以 1009 關閉、HTTP 超量回 **429 + Retry-After**(呼叫端在等答案,可以被告知退讓)。每種拒絕都有指標(`warroomlive.signaling.messages.in`、`warroomlive.api.rejected`)。
   HTTP 這道**跑在認證之前**——洪水應該在讓伺服器驗簽章、抓 IdP 的 JWKS 之前就被擋掉。來源位址取 `X-Forwarded-For` 的**最後一段**(nginx 附加在後面的那段);前面的是客戶端自己塞的、可以偽造,取第一段等於讓任何人每次請求都換一個新額度。健康檢查、`/api/auth/config`、自我認證的 LiveKit webhook 豁免。
 - **清單端點都是分頁**:`/api/recordings/{room}` 與 `/api/search/messages` 收 `limit`/`offset`(預設 50、上限 200,越界夾住而非報錯)。
-- **資料保留**:錄影(連同 MP4)、共享檔案(連同物件)、聊天(連同全文檢索投影)、稽核軌跡、已發布的 outbox 列都有可設定的保留期,每小時分批清理。**預設全部是 0 = 永久保留**——部署當下就開始刪資料是很糟的驚喜,由維運者用 `RETENTION_*_DAYS` 逐項開啟。未發布的 outbox 列永不刪(那是佇列不是歷史);聊天與其搜尋投影共用同一期限,否則搜尋會回傳資料庫已經沒有的內容。
+- **資料保留**:錄影(連同 MP4)、共享檔案(連同物件)、聊天(連同全文檢索投影)、待辦與行事曆、稽核軌跡、已發布的 outbox 列都有可設定的保留期,每小時分批清理。**預設全部是 0 = 永久保留**——部署當下就開始刪資料是很糟的驚喜,由維運者用 `RETENTION_*_DAYS` 逐項開啟。未發布的 outbox 列永不刪(那是佇列不是歷史);聊天與其搜尋投影共用同一期限,否則搜尋會回傳資料庫已經沒有的內容。
 - **連線品質與弱網處理**:每 2 秒量測與每位成員之間的連線(RTT、封包遺失、抖動),在成員名單以訊號格顯示良好/普通/不佳。**持續**不佳時只降低送給該位成員的視訊碼率與解析度——一個人網路差不該拖累其他人;恢復判定刻意比降級慢,避免網路抖動造成畫質反覆跳動。連線被瀏覽器判定 `failed` 時(例如換網路)自動做 ICE 重啟,由 peer id 較小的一方發起以避免雙方相撞。SFU 模式直接採用 LiveKit 的連線品質評級,降級交給既有的 adaptiveStream/dynacast。
 - **斷線自動重連**:筆電休眠、Wi-Fi 切換或後端重啟都會切斷信令連線。前端以指數退避(上限 10 秒、帶抖動)自動重連,期間顯示提示橫幅並暫停聊天輸入;連線恢復後自動重新加入房間、重送音視訊與舉手狀態,並依伺服器回傳的最新成員清單重建畫面(mesh 模式重建 peer connection;SFU 模式的媒體走 LiveKit 自己的連線,不受影響)。**被主持人移出(4403)與主動離開不會重連**——否則等於繞過伺服器的決定。共享筆記與白板本來就會自癒,所以重連只需處理信令平面。
 - **房間權限(主持人 / 鎖定 / 踢人)**:開房者即主持人(👑,離開時自動交接給最資深成員);只有主持人能 **鎖定房間**(🔒 之後新成員以 `room-locked` 被拒,既有成員重連不受影響)與 **移出成員**(對方收到 `kicked` 通知後連線以 4403 關閉)。授權全部在伺服器端驗證——訊息的 `from` 必須等於該連線 join 時的身分,再比對 backplane 中的房間主持人;房間 meta(`room-state`:host + locked)在加入時下發、變更時廣播,多節點部署下由 Redis 原子維護。相應稽核事件:`participant.kicked`、`room.locked`、`room.unlocked`。
@@ -41,6 +41,7 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
   - 預設(無 profile):記憶體環形緩衝(每房最近 `warroomlive.chat.history-limit` 則,預設 100),零依賴,伺服器重啟後消失。
   - `postgres` profile:Spring Data JPA + PostgreSQL,跨重啟耐久。啟用:`SPRING_PROFILES_ACTIVE=postgres`,並提供 `DB_URL` / `DB_USER` / `DB_PASSWORD`。Schema 由 **Flyway** 管理(`backend/src/main/resources/db/migration/`,含 collab 服務的表),Hibernate 只做 `validate`;既有資料庫以 baseline 無縫接軌。
 - **共享檔案**:房間側邊可以直接丟檔案給大家(預設上限 25 MB)。**位元組不經過後端**——後端只簽一條短效的 URL,瀏覽器直接 PUT 到物件儲存,下載也是即時簽發的 GET。上傳完成才寫入資料庫列(有列沒物件是壞掉的下載;有物件沒列只是看不到,會被保留期掃掉)。物件 key 由伺服器決定並固定在 `attachments/<房名>/` 之下,確認時檢查前綴,所以別的房間的檔案塞不進來。大小上限查兩次:簽章前看宣告值,確認時看**實際存進去的大小**——預簽 PUT 本身沒辦法限制大小,少了第二次檢查上限就只是建議。上傳完成會經信令通知房內所有人,清單即時更新。
+- **共用待辦與共用行事曆**:側邊可以開待辦清單(負責人、期限、勾選完成)與行事曆(依日期分組、只顯示接下來的安排)。**這兩者存在資料庫,不在 Yjs 文件裡**——筆記與白板是自由文字與圖形的並行編輯,而待辦與行事曆是有負責人、期限、完成時間的**業務紀錄**:人們會查它(「還有什麼沒做完」)、稽核它(誰關掉的),而且它活得比這場會議久。CRDT 查不了、驗不了、也進不了事件骨幹。**排序由伺服器決定**(未完成優先、期限近的在前、沒期限的在最後);前端不重排,兩個人各自排序就會對「第一件事」講不同的東西。完成記的是時間與人,重複點不會改寫是誰完成的。新增與勾選人人可做(只有主持人能勾的清單不叫共用),刪除限主持人。任何變更都經信令通知房內,對方不用重整就會看到。
 - **訊息搜尋**:側邊可以搜尋聊天記錄(預設只搜這個房間,可切換成全部),結果分頁。資料來自 indexer 的讀模型,所以需要 events 疊加層在跑;沒啟用時會明說「沒有啟用訊息搜尋」,而不是回一個空結果——「沒有符合」跟「沒有索引」是兩件事。
 - **手機版**:視窗窄的時候版面收成單欄,側邊五個面板變成可切換的頁籤。手機上把它們疊起來的話,聊天輸入框會被推到影像下方好幾個畫面的地方,那正好是通話中沒有人會捲過去的位置。
 - **共享白板**:與筆記同面板的「白板」分頁——畫筆(五色)、可拖動/雙擊編輯的便利貼、自己操作的復原(Yjs `UndoManager`,只回退本人變更)。畫完的筆畫與便利貼是 durable 狀態(落在同一份房間 Yjs 文件的 `board:*` 型別,沿用 collab 服務的持久化/限流/快照事件);**進行中的筆畫與游標走 ephemeral awareness**(~25Hz 節流、不落地)——藍圖 durable/ephemeral 分離的白板版。前端以 Konva(react-konva)渲染。
@@ -222,7 +223,25 @@ tests/dr/restore-s3-drill.sh
 
 以上皆不在 CI 跑,需對著實際跑起來的 stack 手動執行。
 
-## 正式對外:HTTPS(TLS 反向代理)
+## 部署到已經有其他站台的機器
+
+機器上 `:80`/`:443` 已經被別的站台的 reverse proxy 佔著時,用 `docker-compose.prod.yml`
+而**不是** TLS 疊加層——後者會自己起一個 Caddy 綁那兩個 port,直接相撞。
+
+```bash
+cp .env.prod.example .env.prod && chmod 600 .env.prod   # DB_PASSWORD 必填
+docker compose --env-file .env.prod \
+  -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+- frontend **只綁 loopback**,由既有的 edge 轉進來;`infrastructure/edge/` 有 Caddy 與 nginx 兩份 site 設定可以直接抄。
+- 少了 `DB_PASSWORD` 或 `PUBLIC_ORIGIN` 會**拒絕啟動**——這個 repo 到處是開發用預設密碼,用預設值跑在公開位址上不該因為「忘了」而發生。
+- **多一層 proxy 會打壞 REST 限流**:後端取 `X-Forwarded-For` 的最後一段(單層拓撲下那是唯一偽造不了的),多一跳之後那段變成 edge 的位址,全世界共用一個額度。這個疊加層會掛上 `infrastructure/edge/real-ip.conf` 修正,runbook 裡有驗證指令。
+- **媒體不走 edge**(SRTP/UDP,proxy 代理不了):mesh 不需要額外開 port,TURN 與 SFU 需要。
+
+完整步驟(DNS、憑證、防火牆、升級、備份)見 [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)。
+
+## 正式對外:HTTPS(TLS 反向代理,WarRoomLive 獨佔整台機器時)
 
 用 Caddy 當邊緣代理,自動取得憑證。這是**選用的疊加層**(`docker-compose.tls.yml`),不影響上面的簡易部署。
 

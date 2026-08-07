@@ -17,8 +17,12 @@ frontend/.vite/
 
 # --- Logs & env ---
 *.log
+# Every local env file, including the .env.prod the deployment runbook has you
+# create with a real database password. The tracked *.example files are the
+# only ones that belong in the repository.
 .env
-.env.local
+.env.*
+!.env*.example
 
 # --- OS / editor ---
 .DS_Store

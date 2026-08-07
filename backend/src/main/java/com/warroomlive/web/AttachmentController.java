@@ -3,15 +3,12 @@ package com.warroomlive.web;
 import com.warroomlive.attachments.AttachmentEntity;
 import com.warroomlive.attachments.AttachmentStore;
 import com.warroomlive.recordings.ObjectStore;
-import com.warroomlive.signaling.Backplane;
 import com.warroomlive.signaling.SignalMessage;
 import com.warroomlive.signaling.SignalingHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -27,7 +24,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -62,7 +58,7 @@ public class AttachmentController {
 
     private final ObjectProvider<AttachmentStore> attachments;
     private final ObjectStore objects;
-    private final Backplane backplane;
+    private final RoomAuthorization authorization;
     private final SignalingHandler signaling;
     private final ObjectMapper mapper;
     private final String publicPrefix;
@@ -71,14 +67,14 @@ public class AttachmentController {
     public AttachmentController(
             ObjectProvider<AttachmentStore> attachments,
             ObjectStore objects,
-            Backplane backplane,
+            RoomAuthorization authorization,
             SignalingHandler signaling,
             ObjectMapper mapper,
             @Value("${warroomlive.attachments.public-prefix:/objects}") String publicPrefix,
             @Value("${warroomlive.attachments.max-bytes:26214400}") long maxBytes) {
         this.attachments = attachments;
         this.objects = objects;
-        this.backplane = backplane;
+        this.authorization = authorization;
         this.signaling = signaling;
         this.mapper = mapper;
         this.publicPrefix = publicPrefix;
@@ -149,7 +145,7 @@ public class AttachmentController {
                 trimmedName(request.filename()),
                 request.contentType() == null || request.contentType().isBlank()
                         ? "application/octet-stream" : request.contentType(),
-                stored, caller());
+                stored, authorization.caller());
         announce(room, saved);
         return describe(saved);
     }
@@ -185,9 +181,9 @@ public class AttachmentController {
     @DeleteMapping("/{room}/{id}")
     public Map<String, Object> delete(@PathVariable String room, @PathVariable long id) {
         // Authorization before the lookup — see the recording library for why.
-        requireHostIfKnown(room);
+        authorization.requireHostIfKnown(room, "delete a room's files");
         AttachmentEntity attachment = find(room, id);
-        if (!store().delete(attachment, "manual", caller())) {
+        if (!store().delete(attachment, "manual", authorization.caller())) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     "the file's object could not be removed; nothing was deleted");
         }
@@ -251,30 +247,7 @@ public class AttachmentController {
         return store;
     }
 
-    /** See {@code RecordingLibraryController.requireHostIfKnown}. */
-    private void requireHostIfKnown(String room) {
-        Backplane.RoomState state = backplane.roomState(room);
-        if (state.hostId() == null) {
-            return;
-        }
-        Optional<String> hostSubject = backplane.subjectOf(room, state.hostId());
-        if (hostSubject.isPresent() && !hostSubject.get().equals(caller())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "only the room's host may delete its files");
-        }
-    }
 
-    /**
-     * The authenticated subject, or {@code anonymous} when the app runs without
-     * auth. Spring's own anonymous principal is called {@code anonymousUser},
-     * which would end up in audit events and on screen; one name for "nobody" is
-     * enough.
-     */
-    private static String caller() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        String name = auth == null ? null : auth.getName();
-        return name == null || name.equals("anonymousUser") ? "anonymous" : name;
-    }
 
     private static Map<String, Object> describe(AttachmentEntity attachment) {
         Map<String, Object> out = new HashMap<>();

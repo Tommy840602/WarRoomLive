@@ -41,7 +41,7 @@ done
 
 # Nothing named: pick by what the running stack can support.
 if [ -z "$SUITES" ]; then
-  SUITES="signaling room-acl crdt capacity reconnect limits retention"
+  SUITES="signaling room-acl crdt capacity reconnect limits retention agenda"
   running devidp && SUITES="$SUITES oidc"
   running indexer && SUITES="$SUITES events"
   running minio && SUITES="$SUITES recordings attachments"
