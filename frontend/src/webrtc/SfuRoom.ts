@@ -13,6 +13,8 @@ export interface MediaRoom {
   join(room: string, displayName: string): void
   leave(room: string): void
   replaceVideoTrack(track: MediaStreamTrack): Promise<void>
+  /** The signaling socket dropped and recovered; re-establish media if needed. */
+  handleReconnect(): void
 }
 
 /**
@@ -99,6 +101,13 @@ export class SfuRoom implements MediaRoom {
       await this.room.localParticipant.publishTrack(track, { source: Track.Source.Camera })
     }
   }
+
+  /**
+   * Nothing to do: media here rides LiveKit's own connection, which has its own
+   * reconnection and is unaffected by the signaling socket dropping. Tearing
+   * down tracks on a signaling blip would cause a visible outage for no reason.
+   */
+  handleReconnect(): void {}
 
   leave(roomName: string): void {
     this.signaling.send({ type: 'leave', room: roomName, from: this.selfId })

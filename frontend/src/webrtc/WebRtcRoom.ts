@@ -72,6 +72,21 @@ export class WebRtcRoom {
     this.peers.clear()
   }
 
+  /**
+   * The signaling socket dropped and came back. Every peer connection is stale:
+   * while we were away the others were told we left and closed their side, so
+   * ours can never recover. Tear them all down — the `peers` reply to the
+   * re-join then makes us the newcomer again and we re-offer to everyone,
+   * which is the same asymmetry a first join uses.
+   */
+  handleReconnect(): void {
+    this.peers.forEach((pc, peerId) => {
+      pc.close()
+      this.events.onPeerLeft(peerId)
+    })
+    this.peers.clear()
+  }
+
   // --- signaling handlers ---------------------------------------------------
 
   private async onExistingPeers(room: string, msg: SignalMessage): Promise<void> {

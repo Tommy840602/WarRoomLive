@@ -51,7 +51,15 @@ public class RoomManager {
     /**
      * Removes the peer associated with the given session, if any.
      *
-     * @return the location it occupied, so callers can notify the remaining peers
+     * <p>A close arriving for a session the peer has already replaced is ignored.
+     * That is the reconnect case: a client whose socket died re-joins on a new
+     * session, and only later — a TCP timeout after a laptop sleep, say — does
+     * the old socket's close arrive. Removing the peer then would evict the
+     * live connection and tell the room it left, while the client believes it
+     * is back in.
+     *
+     * @return the location it occupied, or empty when the session was stale, so
+     *         callers only notify the room about a departure that really happened
      */
     public Optional<PeerLocation> remove(WebSocketSession session) {
         PeerLocation location = sessionIndex.remove(session.getId());
@@ -59,12 +67,17 @@ public class RoomManager {
             return Optional.empty();
         }
         Map<String, Member> members = rooms.get(location.room());
-        if (members != null) {
-            members.remove(location.peerId());
-            if (members.isEmpty()) {
-                // Guard against leaking empty rooms; only drop if still empty.
-                rooms.compute(location.room(), (r, m) -> (m != null && m.isEmpty()) ? null : m);
-            }
+        if (members == null) {
+            return Optional.of(location);
+        }
+        Member current = members.get(location.peerId());
+        if (current != null && !current.session().getId().equals(session.getId())) {
+            return Optional.empty(); // superseded by a reconnect; nothing to do
+        }
+        members.remove(location.peerId());
+        if (members.isEmpty()) {
+            // Guard against leaking empty rooms; only drop if still empty.
+            rooms.compute(location.room(), (r, m) -> (m != null && m.isEmpty()) ? null : m);
         }
         return Optional.of(location);
     }
