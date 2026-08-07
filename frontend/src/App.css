@@ -88,11 +88,6 @@
   align-items: start;
 }
 
-@media (max-width: 800px) {
-  .workspace {
-    grid-template-columns: 1fr;
-  }
-}
 
 .video-grid {
   display: grid;
@@ -223,6 +218,38 @@
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-width: 0;
+}
+
+/* Only ever shown by the narrow-screen media query, which lives at the end of
+   this file: same specificity, so whichever comes last wins, and the override
+   has to be the one that does. */
+.sidebar__tabs {
+  display: none;
+  gap: 0.3rem;
+  overflow-x: auto;
+}
+
+.sidebar__tab {
+  flex: 1 0 auto;
+  border: 1px solid #2a2f38;
+  border-radius: 8px;
+  background: #171a21;
+  color: #9aa0a6;
+  cursor: pointer;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.sidebar__tab[aria-pressed='true'] {
+  background: #2f3846;
+  color: #e6e8eb;
+  border-color: #3b82f6;
+}
+
+.sidebar__panel {
+  min-width: 0;
 }
 
 .members {
@@ -666,6 +693,24 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* Pushes the delete button to the far edge, away from play. */
+  flex: 1 1 auto;
+}
+
+.recordings__delete {
+  border: none;
+  border-radius: 6px;
+  padding: 0.2rem 0.45rem;
+  background: transparent;
+  color: #9aa0a6;
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+}
+
+.recordings__delete:hover {
+  background: #7f1d1d;
+  color: #fee2e2;
 }
 
 .recordings__when {
@@ -688,4 +733,314 @@
   padding: 0.4rem 0.9rem;
   color: #f87171;
   font-size: 0.8rem;
+}
+
+/* --- Shared files ------------------------------------------------------- */
+
+.files {
+  border-top: 1px solid #2a2f37;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.files__title {
+  margin: 0;
+  padding: 0.6rem 0.9rem 0.4rem;
+  font-size: 0.85rem;
+  color: #9aa0a6;
+  font-weight: 600;
+}
+
+.files__input {
+  margin: 0 0.9rem 0.4rem;
+  font-size: 0.75rem;
+  color: #9aa0a6;
+  max-width: calc(100% - 1.8rem);
+}
+
+.files__progress {
+  margin: 0 0.9rem 0.4rem;
+  width: calc(100% - 1.8rem);
+  height: 4px;
+}
+
+.files__error {
+  margin: 0;
+  padding: 0.4rem 0.9rem;
+  color: #f87171;
+  font-size: 0.8rem;
+}
+
+.files__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.files__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.9rem;
+}
+
+.files__item:hover {
+  background: #23272e;
+}
+
+.files__download {
+  border: none;
+  border-radius: 50%;
+  width: 26px;
+  height: 26px;
+  background: #2f3846;
+  color: #e6e8eb;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.files__download:hover {
+  background: #3b82f6;
+}
+
+.files__meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* A long filename must not push the delete button off the panel. */
+.files__name {
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files__detail {
+  font-size: 0.75rem;
+  color: #9aa0a6;
+}
+
+.files__delete {
+  border: none;
+  border-radius: 6px;
+  padding: 0.2rem 0.45rem;
+  background: transparent;
+  color: #9aa0a6;
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+}
+
+.files__delete:hover {
+  background: #7f1d1d;
+  color: #fee2e2;
+}
+
+/* --- Message search ------------------------------------------------------ */
+
+.search {
+  border-top: 1px solid #2a2f37;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.search__title {
+  margin: 0;
+  padding: 0.6rem 0.9rem 0.4rem;
+  font-size: 0.85rem;
+  color: #9aa0a6;
+  font-weight: 600;
+}
+
+.search__form {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0 0.9rem 0.4rem;
+}
+
+.search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #1b1f24;
+  border: 1px solid #2a2f37;
+  border-radius: 6px;
+  color: #e6e8eb;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.search__go {
+  border: none;
+  border-radius: 6px;
+  background: #2f3846;
+  color: #e6e8eb;
+  cursor: pointer;
+  padding: 0.35rem 0.6rem;
+}
+
+.search__go:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.search__scope {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.9rem 0.4rem;
+  font-size: 0.75rem;
+  color: #9aa0a6;
+}
+
+.search__error,
+.search__empty {
+  margin: 0;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.8rem;
+}
+
+.search__error {
+  color: #f87171;
+}
+
+.search__empty {
+  color: #9aa0a6;
+}
+
+.search__results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  max-height: 40vh;
+}
+
+.search__hit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.35rem 0.9rem;
+}
+
+.search__hit:hover {
+  background: #23272e;
+}
+
+.search__hit-head {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  font-size: 0.72rem;
+  color: #9aa0a6;
+}
+
+.search__hit-name {
+  color: #e6e8eb;
+}
+
+.search__hit-room {
+  color: #60a5fa;
+}
+
+.search__hit-when {
+  margin-left: auto;
+}
+
+.search__hit-text {
+  font-size: 0.85rem;
+  /* Search results are arbitrary text, including URLs with no spaces. */
+  overflow-wrap: anywhere;
+}
+
+.search__paging {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.4rem 0.9rem 0.6rem;
+}
+
+.search__paging button {
+  flex: 1 1 0;
+  border: 1px solid #2a2f37;
+  border-radius: 6px;
+  background: transparent;
+  color: #e6e8eb;
+  cursor: pointer;
+  padding: 0.25rem;
+  font-size: 0.75rem;
+}
+
+.search__paging button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* --- Narrow screens ------------------------------------------------------
+   Below this width the two-column workspace becomes one, and the sidebar's
+   five stacked panels become a tab strip: on a phone, stacking them means the
+   chat box sits several screens below the video, which is the one place nobody
+   will scroll to during a call. On a wide screen every panel stays visible and
+   the tab bar is not rendered at all. */
+@media (max-width: 800px) {
+  .app {
+    padding: 1rem 0.85rem 1.5rem;
+  }
+
+  .app__header h1 {
+    font-size: 1.35rem;
+  }
+
+  .app__subtitle {
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+  }
+
+  /* A row of inputs and buttons does not fit; let it wrap and let the fields
+     take the full width rather than shrinking to unusable. */
+  .app__controls {
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+
+  .app__controls label {
+    flex: 1 1 100%;
+  }
+
+  .app__controls button {
+    flex: 1 1 auto;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+
+  /* Two tiles across in landscape, one in portrait — 160px is about the
+     smallest a face is still recognisable at. */
+  .video-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 0.5rem;
+  }
+
+  .sidebar__tabs {
+    display: flex;
+  }
+
+  .sidebar__panel {
+    display: none;
+  }
+
+  .sidebar[data-active='members'] .sidebar__panel[data-panel='members'],
+  .sidebar[data-active='recordings'] .sidebar__panel[data-panel='recordings'],
+  .sidebar[data-active='search'] .sidebar__panel[data-panel='search'],
+  .sidebar[data-active='files'] .sidebar__panel[data-panel='files'],
+  .sidebar[data-active='chat'] .sidebar__panel[data-panel='chat'] {
+    display: block;
+  }
 }

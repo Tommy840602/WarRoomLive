@@ -19,6 +19,7 @@ export type SignalType =
   | 'kick'
   | 'kicked'
   | 'room-state'
+  | 'attachment'
   | 'room-full'
   | 'room-locked'
   | 'error'
@@ -43,6 +44,21 @@ export interface MediaState {
 export interface RoomStateInfo {
   host: string
   locked: boolean
+}
+
+/**
+ * A file shared into the room, carried in an `attachment` message when someone
+ * uploads one and returned by `GET /api/attachments/{room}`. The bytes are never
+ * here — a download URL is presigned on request.
+ */
+export interface Attachment {
+  id: number
+  room: string
+  filename: string
+  contentType: string
+  sizeBytes: number
+  uploadedBy: string
+  uploadedAt: string
 }
 
 /** A persisted chat message, carried in the `history` message on join. */

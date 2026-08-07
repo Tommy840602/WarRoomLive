@@ -55,8 +55,12 @@ public class RedisBackplane implements Backplane, org.springframework.context.Sm
     private final String nodeId = UUID.randomUUID().toString().substring(0, 8);
     private volatile LocalDelivery delivery;
 
-    /** Directory entry stored per member. */
-    record MemberEntry(String name, String node) {
+    /**
+     * Directory entry stored per member. {@code subject} is null without an
+     * identity provider, and is absent from entries written by an older node —
+     * Jackson maps both to null, so a rolling upgrade needs no migration.
+     */
+    record MemberEntry(String name, String node, String subject) {
     }
 
     /** Pub/sub envelope. Exactly one of {@code to} / {@code exclude} is set. */
@@ -203,12 +207,12 @@ public class RedisBackplane implements Backplane, org.springframework.context.Sm
             """, Long.class);
 
     @Override
-    public int tryRegister(String room, String peerId, String name, int maxRoomSize) {
+    public int tryRegister(String room, String peerId, String name, String subject, int maxRoomSize) {
         try {
             Long result = redis.execute(TRY_REGISTER,
                     List.of(roomKey(room), ROOMS_KEY, metaKey(room)),
                     peerId,
-                    mapper.writeValueAsString(new MemberEntry(name, nodeId)),
+                    mapper.writeValueAsString(new MemberEntry(name, nodeId, subject)),
                     String.valueOf(maxRoomSize),
                     room);
             return result == null ? REGISTER_REJECTED : result.intValue();
@@ -241,9 +245,17 @@ public class RedisBackplane implements Backplane, org.springframework.context.Sm
 
     @Override
     public Optional<String> nodeOf(String room, String peerId) {
+        return entryOf(room, peerId).map(MemberEntry::node);
+    }
+
+    @Override
+    public Optional<String> subjectOf(String room, String peerId) {
+        return entryOf(room, peerId).map(MemberEntry::subject);
+    }
+
+    private Optional<MemberEntry> entryOf(String room, String peerId) {
         Object raw = redis.opsForHash().get(roomKey(room), peerId);
-        MemberEntry member = raw == null ? null : readEntry(raw.toString());
-        return Optional.ofNullable(member).map(MemberEntry::node);
+        return Optional.ofNullable(raw == null ? null : readEntry(raw.toString()));
     }
 
     @Override

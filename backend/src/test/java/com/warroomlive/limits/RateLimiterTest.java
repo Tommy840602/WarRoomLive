@@ -1,6 +1,8 @@
-package com.warroomlive.signaling;
+package com.warroomlive.limits;
 
 import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -75,9 +77,43 @@ class RateLimiterTest {
         RateLimiter limiter = new RateLimiter(60);
         limiter.tryConsume("a", 0L);
         limiter.tryConsume("b", 0L);
-        assertThat(limiter.trackedConnections()).isEqualTo(2);
+        assertThat(limiter.trackedCallers()).isEqualTo(2);
 
         limiter.release("a");
-        assertThat(limiter.trackedConnections()).isEqualTo(1);
+        assertThat(limiter.trackedCallers()).isEqualTo(1);
+    }
+
+    @Test
+    void evictsIdleBucketsForCallersThatNeverDisconnect() {
+        // HTTP has no close event to release on, so idle callers are swept.
+        RateLimiter limiter = new RateLimiter(60);
+        limiter.tryConsume("gone", 0L);
+        limiter.tryConsume("still-here", 9 * SECOND);
+
+        assertThat(limiter.evictIdle(Duration.ofSeconds(5), 10 * SECOND)).isEqualTo(1);
+        assertThat(limiter.trackedCallers()).isEqualTo(1);
+    }
+
+    @Test
+    void evictionForgetsACallerWithoutForgivingOne() {
+        // A bucket idle past a full refill is indistinguishable from a fresh
+        // one, so dropping it cannot hand anyone an allowance they had not
+        // already earned back by waiting.
+        RateLimiter limiter = new RateLimiter(60);
+        for (int i = 0; i < 120; i++) {
+            limiter.tryConsume("flooder", 0L);
+        }
+        assertThat(limiter.tryConsume("flooder", 0L)).isFalse();
+
+        // Idle long enough to refill completely, then evicted.
+        limiter.evictIdle(Duration.ofSeconds(5), 10 * SECOND);
+        assertThat(limiter.trackedCallers()).isZero();
+
+        // Still throttled the moment it floods again, from the same full bucket
+        // it would have had anyway.
+        for (int i = 0; i < 120; i++) {
+            limiter.tryConsume("flooder", 10 * SECOND);
+        }
+        assertThat(limiter.tryConsume("flooder", 10 * SECOND)).isFalse();
     }
 }

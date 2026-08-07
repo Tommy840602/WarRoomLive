@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   SignalingClient,
   defaultSignalingUrl,
@@ -17,9 +17,11 @@ import { ChatPanel } from './components/ChatPanel'
 import { CollabPanel } from './components/CollabPanel'
 import { MemberList, type Member } from './components/MemberList'
 import { RecordingsPanel, type Recording } from './components/RecordingsPanel'
+import { FilesPanel } from './components/FilesPanel'
+import { SearchPanel, SEARCH_PAGE_SIZE, type SearchHit } from './components/SearchPanel'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
-import type { MediaState, PeerInfo, RoomStateInfo, StoredMessage } from './signaling/types'
+import type { Attachment, MediaState, PeerInfo, RoomStateInfo, StoredMessage } from './signaling/types'
 import type { PeerQuality } from './webrtc/quality'
 import { useAuth } from './auth/AuthGate'
 import './App.css'
@@ -38,6 +40,9 @@ interface ChatEntry {
   /** For replayed history: the sender's name as recorded, since they may have left. */
   name?: string
 }
+
+/** The side panels a narrow screen shows one at a time. */
+type SidebarTab = 'members' | 'recordings' | 'search' | 'files' | 'chat'
 
 export default function App() {
   const { token, displayName: authName } = useAuth()
@@ -63,6 +68,13 @@ export default function App() {
   const [connection, setConnection] = useState<ConnectionState>('closed')
   const [peerQuality, setPeerQuality] = useState<Map<string, PeerQuality>>(new Map())
   const [recordings, setRecordings] = useState<Recording[]>([])
+  const [files, setFiles] = useState<Attachment[]>([])
+  // The panel is offered only where an upload could actually succeed: the list
+  // endpoint 404s without an object store, so its response is the answer.
+  const [fileSharingAvailable, setFileSharingAvailable] = useState(false)
+  // Which side panel is showing on a narrow screen. Chat is the default because
+  // it is the one people keep open; on a wide screen this is ignored entirely.
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('chat')
 
   const clientRef = useRef<SignalingClient | null>(null)
   const roomRef = useRef<MediaRoom | null>(null)
@@ -77,6 +89,17 @@ export default function App() {
   // have replaced the token since, and a stale one is refused at the handshake.
   const tokenRef = useRef(token)
   tokenRef.current = token
+
+  /**
+   * Bearer header for API calls, read from the ref rather than the captured
+   * value: a silent renew may have replaced the token since the callback was
+   * created. Empty without OIDC, which is what the permit-all default expects.
+   */
+  const authHeaders = useCallback(
+    (): Record<string, string> =>
+      tokenRef.current ? { Authorization: `Bearer ${tokenRef.current}` } : {},
+    [],
+  )
   // The room/name in effect for the session, so a reconnect can re-join without
   // depending on the inputs, which the user may have edited meanwhile.
   const joinedAsRef = useRef<{ room: string; displayName: string } | null>(null)
@@ -137,6 +160,8 @@ export default function App() {
     setPeerStates(new Map())
     setPeerQuality(new Map())
     setRecordings([])
+    setFiles([])
+    setFileSharingAvailable(false)
     setMessages([])
     setScreenSharing(false)
     setAudioEnabled(true)
@@ -192,10 +217,9 @@ export default function App() {
    */
   const loadRecordings = useCallback(async (roomName: string) => {
     try {
-      const headers: HeadersInit = tokenRef.current
-        ? { Authorization: `Bearer ${tokenRef.current}` }
-        : {}
-      const res = await fetch(`/api/recordings/${encodeURIComponent(roomName)}`, { headers })
+      const res = await fetch(`/api/recordings/${encodeURIComponent(roomName)}`, {
+        headers: authHeaders(),
+      })
       setRecordings(res.ok ? ((await res.json()) as Recording[]) : [])
     } catch {
       setRecordings([])
@@ -204,16 +228,143 @@ export default function App() {
 
   /** Playback URLs expire, so one is minted per press rather than per listing. */
   const recordingUrl = useCallback(async (id: number) => {
-    const headers: HeadersInit = tokenRef.current
-      ? { Authorization: `Bearer ${tokenRef.current}` }
-      : {}
     const res = await fetch(
       `/api/recordings/${encodeURIComponent(joinedAsRef.current?.room ?? '')}/${id}/url`,
-      { headers },
+      { headers: authHeaders() },
     )
     if (!res.ok) throw new Error(`無法取得播放連結(HTTP ${res.status})`)
     return ((await res.json()) as { url: string }).url
   }, [])
+
+  /**
+   * Loads the files shared into this room. 404s without an object store, which
+   * is the ordinary case — an empty list simply hides the panel.
+   */
+  const loadFiles = useCallback(async (roomName: string) => {
+    try {
+      const res = await fetch(`/api/attachments/${encodeURIComponent(roomName)}`, {
+        headers: authHeaders(),
+      })
+      setFileSharingAvailable(res.ok)
+      setFiles(res.ok ? ((await res.json()) as Attachment[]) : [])
+    } catch {
+      setFileSharingAvailable(false)
+      setFiles([])
+    }
+  }, [])
+
+  /**
+   * Uploads a file straight to the object store: the server signs a URL, the
+   * bytes go there directly, and only then is the upload confirmed. XHR rather
+   * than fetch because it is the only way to get real progress events.
+   */
+  const uploadFile = useCallback(async (file: File, onProgress: (f: number) => void) => {
+    const roomName = joinedAsRef.current?.room ?? ''
+    const signRes = await fetch(`/api/attachments/${encodeURIComponent(roomName)}/upload-url`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        filename: file.name,
+        contentType: file.type || 'application/octet-stream',
+        sizeBytes: file.size,
+      }),
+    })
+    if (!signRes.ok) {
+      throw new Error(signRes.status === 413 ? '檔案太大' : `無法上傳(HTTP ${signRes.status})`)
+    }
+    const { uploadUrl, objectKey } = (await signRes.json()) as {
+      uploadUrl: string
+      objectKey: string
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('PUT', uploadUrl)
+      // The signature covers the method, path and host — not the content type,
+      // so setting one here would not invalidate it, but the store records it
+      // and we would rather it match what we tell the server afterwards.
+      xhr.setRequestHeader('content-type', file.type || 'application/octet-stream')
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded / e.total)
+      }
+      xhr.onload = () =>
+        xhr.status >= 200 && xhr.status < 300
+          ? resolve()
+          : reject(new Error(`上傳失敗(HTTP ${xhr.status})`))
+      xhr.onerror = () => reject(new Error('上傳失敗'))
+      xhr.send(file)
+    })
+
+    const confirmRes = await fetch(`/api/attachments/${encodeURIComponent(roomName)}`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        objectKey,
+        filename: file.name,
+        contentType: file.type || 'application/octet-stream',
+      }),
+    })
+    if (!confirmRes.ok) throw new Error(`無法記錄檔案(HTTP ${confirmRes.status})`)
+    await loadFiles(roomName)
+  }, [loadFiles])
+
+  /** Download URLs expire, so one is minted per press rather than per listing. */
+  const fileUrl = useCallback(async (id: number) => {
+    const res = await fetch(
+      `/api/attachments/${encodeURIComponent(joinedAsRef.current?.room ?? '')}/${id}/url`,
+      { headers: authHeaders() },
+    )
+    if (!res.ok) throw new Error(`無法取得下載連結(HTTP ${res.status})`)
+    return ((await res.json()) as { url: string }).url
+  }, [])
+
+  const deleteFile = useCallback(async (id: number) => {
+    const roomName = joinedAsRef.current?.room ?? ''
+    const res = await fetch(`/api/attachments/${encodeURIComponent(roomName)}/${id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    })
+    if (!res.ok) {
+      throw new Error(res.status === 403 ? '只有主持人可以刪除' : `刪除失敗(HTTP ${res.status})`)
+    }
+    await loadFiles(roomName)
+  }, [loadFiles])
+
+  /**
+   * Runs a chat search. The results come from the indexer's read model, so the
+   * endpoint is absent unless the events overlay is running — which is reported
+   * as such rather than as an empty result, since "nothing matched" and "nothing
+   * is indexed" are very different answers.
+   */
+  const searchMessages = useCallback(
+    async (query: string, thisRoomOnly: boolean, offset: number): Promise<SearchHit[]> => {
+      const params = new URLSearchParams({
+        q: query,
+        limit: String(SEARCH_PAGE_SIZE),
+        offset: String(offset),
+      })
+      if (thisRoomOnly) params.set('room', joinedAsRef.current?.room ?? '')
+      const res = await fetch(`/api/search/messages?${params}`, { headers: authHeaders() })
+      if (res.status === 404) throw new Error('這個部署沒有啟用訊息搜尋')
+      if (!res.ok) throw new Error(`搜尋失敗(HTTP ${res.status})`)
+      return (await res.json()) as SearchHit[]
+    },
+    [authHeaders],
+  )
+
+  /**
+   * Deletes a recording and its file. The list is refetched rather than filtered
+   * locally, so what is shown afterwards is what the server actually holds.
+   */
+  const deleteRecording = useCallback(async (id: number) => {
+    const room = joinedAsRef.current?.room ?? ''
+    const res = await fetch(`/api/recordings/${encodeURIComponent(room)}/${id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    })
+    if (!res.ok) throw new Error(`刪除失敗(HTTP ${res.status})`)
+    await loadRecordings(room)
+  }, [loadRecordings])
 
   const join = useCallback(async () => {
     setStatus('connecting')
@@ -277,6 +428,9 @@ export default function App() {
       })
       // Room meta: who hosts and whether newcomers are locked out.
       client.on('room-state', (msg) => setRoomState(msg.payload as RoomStateInfo))
+      // Someone shared a file. The event carries it, but the list is refetched
+      // so what is shown is the server's ordering, not an append guess.
+      client.on('attachment', () => void loadFiles(room))
       client.on('room-locked', () => {
         teardown()
         setError('房間已被主持人鎖定,目前不開放加入')
@@ -364,11 +518,12 @@ export default function App() {
       mediaRoom.join(room, displayName)
       setStatus('in-room')
       void loadRecordings(room)
+      void loadFiles(room)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setStatus('error')
     }
-  }, [room, name, token, teardown, showReaction, rejoin, loadRecordings])
+  }, [room, name, token, teardown, showReaction, rejoin, loadRecordings, loadFiles])
 
   const leave = useCallback(() => {
     roomRef.current?.leave(room)
@@ -419,6 +574,23 @@ export default function App() {
 
   const isHost = roomState.host === selfIdRef.current
 
+  /**
+   * Which side panels exist right now. Drives the narrow-screen tab bar, so it
+   * never offers a tab for a panel that is not rendered — a tab that switches to
+   * nothing reads as a broken app.
+   */
+  const sidebarPanels = useMemo(() => {
+    const panels: { id: SidebarTab; label: string }[] = []
+    if (status === 'in-room') panels.push({ id: 'members', label: '成員' })
+    if (status === 'in-room' && recordings.length > 0) {
+      panels.push({ id: 'recordings', label: '錄影' })
+    }
+    if (status === 'in-room') panels.push({ id: 'search', label: '搜尋' })
+    if (status === 'in-room' && fileSharingAvailable) panels.push({ id: 'files', label: '檔案' })
+    panels.push({ id: 'chat', label: '聊天' })
+    return panels
+  }, [status, recordings.length, fileSharingAvailable])
+
   /** Host only: lock or unlock the room to newcomers (server re-validates). */
   const toggleLock = useCallback(() => {
     clientRef.current?.send({
@@ -468,7 +640,7 @@ export default function App() {
 
   /** Starts/stops a server-side LiveKit Egress recording (SFU mode only). */
   const toggleRecording = useCallback(async () => {
-    const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {}
+    const headers = authHeaders()
     try {
       if (recordingId) {
         await fetch(`/api/media/recordings/stop?egressId=${encodeURIComponent(recordingId)}`, {
@@ -605,19 +777,58 @@ export default function App() {
             />
           ))}
         </div>
-        <div className="sidebar">
+        <div className="sidebar" data-active={sidebarTab}>
+          {/* Only rendered on narrow screens (see App.css). A phone cannot show
+              five stacked panels usefully, so there they become one at a time;
+              on a desktop every panel stays visible and this bar is hidden. */}
+          <nav className="sidebar__tabs" aria-label="側邊面板">
+            {sidebarPanels.map((panel) => (
+              <button
+                key={panel.id}
+                className="sidebar__tab"
+                aria-pressed={sidebarTab === panel.id}
+                onClick={() => setSidebarTab(panel.id)}
+              >
+                {panel.label}
+              </button>
+            ))}
+          </nav>
           {status === 'in-room' && (
-            <MemberList
-              members={members}
-              hostId={roomState.host}
-              locked={roomState.locked}
-              canKick={isHost}
-              onKick={kickPeer}
-            />
+            <div className="sidebar__panel" data-panel="members">
+              <MemberList
+                members={members}
+                hostId={roomState.host}
+                locked={roomState.locked}
+                canKick={isHost}
+                onKick={kickPeer}
+              />
+            </div>
           )}
           {status === 'in-room' && recordings.length > 0 && (
-            <RecordingsPanel recordings={recordings} onRequestUrl={recordingUrl} />
+            <div className="sidebar__panel" data-panel="recordings">
+              <RecordingsPanel
+                recordings={recordings}
+                onRequestUrl={recordingUrl}
+                onDelete={deleteRecording}
+              />
+            </div>
           )}
+          {status === 'in-room' && (
+            <div className="sidebar__panel" data-panel="search">
+              <SearchPanel onSearch={searchMessages} />
+            </div>
+          )}
+          {status === 'in-room' && fileSharingAvailable && (
+            <div className="sidebar__panel" data-panel="files">
+              <FilesPanel
+                files={files}
+                onUpload={uploadFile}
+                onRequestUrl={fileUrl}
+                onDelete={deleteFile}
+              />
+            </div>
+          )}
+          <div className="sidebar__panel" data-panel="chat">
           <ChatPanel
             messages={messages.map((m) => ({
               id: m.id,
@@ -628,6 +839,7 @@ export default function App() {
             onSend={sendChat}
             disabled={status !== 'in-room' || connection !== 'open'}
           />
+          </div>
         </div>
       </section>
 

@@ -34,7 +34,20 @@
 
 **B. 錄影播放介面** ✅ 已完成:`recordings` 表(V6)由 webhook 與事件同交易寫入(egress id 冪等),`GET /api/recordings/{room}` 列出、`/{id}/url` 即時簽發 30 分鐘有效的 SigV4 預簽連結;前端側邊面板列出並就地播放。物件儲存憑證不出後端、位元組不經後端(nginx 轉發)。以 `S3PresignerTest`、`tests/e2e/run.sh recordings`(含竄改簽章需被拒)、`tests/ui/run.sh recordings` 驗證。
 
-**C. 需要真實環境才能推進(部署層,非程式碼缺口)**
+**C. 資料保留與刪除** ✅ 已完成:`RetentionService`(postgres profile,每小時)清理錄影+物件、聊天+其 `message_search` 投影、`audit_log`、**已發布**的 `outbox_events`。**每種期限預設 0 = 永久保留**——部署當下就開始刪資料是很糟的驚喜,由維運者逐項以 `warroomlive.retention.*-days` 開啟。刪除分批(500 列/批、每表每輪最多 20 批)且各自獨立交易(用 `TransactionTemplate`——同一 bean 自呼叫的 `@Transactional` 不會生效)。聊天與其搜尋投影共用同一期限是刻意的:只刪訊息卻留索引,等於讓搜尋回傳資料庫已經沒有的內容。未發布的 outbox 列永不碰——那是佇列不是歷史。錄影**先刪物件再刪列**,物件刪不掉就留著列等下一輪,而不是留下沒人指得到的檔案。另加**手動刪除**`DELETE /api/recordings/{room}/{id}`(共用同一條路徑,發 `meeting.recording.deleted` 帶 `actor`),前端錄影面板兩段式確認。V7 補上四個依時間的索引——既有索引都以 room/aggregate 開頭,年齡條件只能全表掃描。以 `tests/e2e/run.sh retention` 驗證(用 `docker compose run` 另起一個開了保留期限的 backend 打同一個資料庫,不動到跑著的 stack;**關鍵斷言是否定的那些**——新資料要活著、未發布的 outbox 列要活著)。
+
+**D. REST 濫用防護與分頁** ✅ 已完成:HTTP API 沿用同一個 token bucket(`limits/RestRateLimitFilter`,預設 20/s + 2 倍突發),**跑在認證之前**——洪水應該在讓伺服器驗簽章、抓 JWKS 之前就被擋掉,這也是為什麼以位址而非 subject 為 key。位址取 `X-Forwarded-For` 的**最後一段**:nginx 是附加在後面,前面的是客戶端自己塞的、可偽造;取第一段等於讓任何人每次請求都換一個新額度。超量回 **429 + Retry-After**(HTTP 呼叫端在等答案,可以被告知退讓;信令則是丟棄)。健康檢查、`/api/auth/config`、自我認證的 LiveKit webhook 豁免。HTTP 沒有斷線事件可以釋放 bucket,改為定期掃除閒置。清單端點改為分頁:`/api/recordings/{room}` 與 `/api/search/messages` 收 `limit`/`offset`(預設 50、上限 200,越界夾住而非報錯),搜尋另限查詢字串長度(ILIKE 分支會掃描)。以 `RateLimiterTest`、`RestRateLimitFilterTest`(含偽造 XFF 不能換額度)、`PagesTest`、`tests/e2e/run.sh limits` 驗證。
+
+**E. 身分綁定與產品缺口** ✅ 已完成:
+
+- **身分由伺服器決定**:WS 握手擷取 JWT 的 subject 與 IdP 認可的名稱(`WebSocketConfig`),`join` 時**以驗證過的名稱覆蓋客戶端送來的**,subject 進 backplane 成員目錄(`tryRegister(..., subject, ...)` / `Backplane.subjectOf`,Redis 的 `MemberEntry` 多一個欄位、缺欄位 Jackson 給 null,滾動升級不用遷移)。這補上了上一輪標出的缺口:登入原本只證明「有權限」,對「你是誰」毫無約束力。subject **不放進 `PeerInfo`**——房間需要名字,不需要別人的帳號識別碼。刪除錄影與刪除檔案因此改為**房間主持人限定**(主持人 subject 已知時);房間空著或沒有 IdP 時沒有可比對的對象,退回只做歸屬。以 `LocalBackplaneTest`(含交接時 subject 要跟著走)與 `tests/e2e/run.sh oidc`(用 alice 的 token 自稱別的名字,房間看到的仍是 alice;bob 刪 alice 主持的房間的錄影得到 403,而且**在查有沒有這支錄影之前**就被擋——404 會洩漏存在與否)驗證。
+- **共享檔案**(`attachments/` + `AttachmentController`,V8):簽章 → 瀏覽器直接 PUT 到物件儲存 → 確認,**列最後才寫**。物件 key 由伺服器決定並固定在 `attachments/<房名>/`,確認時檢查前綴。大小上限查兩次(簽章前看宣告、確認時看實際存進去的),因為預簽 PUT 自己擋不了大小。`ObjectStore` 收斂成唯一知道物件儲存位置與簽章方式的地方;nginx 多一個 `/objects/` location(同樣改寫 Host,另外放行 PUT body)。上傳完成經 `SignalingHandler.broadcastToRoom` 以 `attachment` 訊息通知房內。納入保留期(`RETENTION_ATTACHMENTS_DAYS`)與事件(`attachment.created` / `attachment.deleted`)。
+- **訊息搜尋介面**:`GET /api/search/messages` 之前沒有任何入口。側邊面板支援房內/全部切換與分頁;搜尋未啟用時明說,而不是回空結果。
+- **手機版版面**:窄螢幕收成單欄,側邊面板變成頁籤(CSS 媒體查詢 + `data-active`,桌面版完全不變)。
+
+驗證:`mvn test`、`frontend npm test`、`tests/e2e run.sh`(base / recording / oidc)、`tests/ui run.sh`。
+
+**F. 需要真實環境才能推進(部署層,非程式碼缺口)**
 真實 IdP(Keycloak/Entra)對接演練、Slack/PagerDuty 告警接收端、TURN/TLS 443 真憑證、跨區域備份複寫與 KMS、目標環境的藍圖級工作負載(20k 連線)。
 
 **D. 等規模需求出現再做**

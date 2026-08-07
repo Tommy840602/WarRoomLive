@@ -28,7 +28,9 @@ tests (`npm test` in `frontend/`) are the part that does run there, and
 | `collab` | Typing in the shared notes reaches the other participant, and a stroke drawn on the whiteboard appears on their canvas (measured as rendered pixels, not just document state). |
 | `room-acl` | Host-only affordances are offered only to the host, locking shows for everyone, and a kicked participant leaves *and stays gone* across the reconnect backoff. |
 | `quality` | Real `getStats()` readings reach the connection indicator, a healthy link is graded good rather than flagged, and nothing is shown against your own entry. The thresholds and hysteresis themselves are unit-tested in `frontend/src/webrtc/quality.test.ts`. |
-| `recordings` | A finished recording is listed in the room with a readable duration, and pressing play loads a presigned URL into the player that the page can actually fetch — with no object-store secret anywhere in the page. |
+| `recordings` | A finished recording is listed in the room with a readable duration, and pressing play loads a presigned URL into the player that the page can actually fetch — with no object-store secret anywhere in the page. Deleting takes two presses (the first only arms it), and the list is refetched afterwards, so an empty panel means the server really lost it. |
+| `layout` | The phone-sized layout: the sidebar's five panels become one at a time behind a tab strip, the tabs match the panels that actually exist, nothing spills off the side, and video tiles stay legible. A wide screen is checked too, to prove the change is confined to narrow ones. |
+| `files` | Sharing a file the way a person does: pick it, watch it upload straight from the page to the object store, see it appear live for the other participant, download the exact bytes back, and delete it in two presses. |
 | `reconnect` | **Destructive** — restarts the backend mid-session. The banner appears and clears, both sides list the right members afterwards (no ghosts, no duplicates), chat flows again both ways, and flags that live only in other clients' memory were replayed. |
 
 ## Notes

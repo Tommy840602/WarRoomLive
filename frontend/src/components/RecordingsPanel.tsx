@@ -13,6 +13,8 @@ interface RecordingsPanelProps {
   recordings: Recording[]
   /** Fetches a fresh playback URL — they are short-lived, so never cached. */
   onRequestUrl: (id: number) => Promise<string>
+  /** Deletes the recording and its file. Irreversible, hence the confirmation. */
+  onDelete: (id: number) => Promise<void>
 }
 
 /**
@@ -22,14 +24,33 @@ interface RecordingsPanelProps {
  * the list renders: they expire, so minting one per listed item would hand out
  * credentials nobody asked for and leave them to go stale.
  */
-export function RecordingsPanel({ recordings, onRequestUrl }: RecordingsPanelProps) {
+export function RecordingsPanel({ recordings, onRequestUrl, onDelete }: RecordingsPanelProps) {
   const [playing, setPlaying] = useState<{ id: number; url: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState<number | null>(null)
 
   const play = async (id: number) => {
     setError(null)
     try {
       setPlaying({ id, url: await onRequestUrl(id) })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  // Two presses rather than a browser confirm(): the dialog blocks the whole
+  // page during a call, and this is a room people are talking in.
+  const remove = async (id: number) => {
+    if (confirming !== id) {
+      setConfirming(id)
+      return
+    }
+    setConfirming(null)
+    setError(null)
+    try {
+      await onDelete(id)
+      // The player would otherwise keep showing a URL for a file that is gone.
+      if (playing?.id === id) setPlaying(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -51,6 +72,15 @@ export function RecordingsPanel({ recordings, onRequestUrl }: RecordingsPanelPro
                 {formatDuration(recording.durationMs)}・{formatSize(recording.sizeBytes)}
               </span>
             </span>
+            <button
+              className="recordings__delete"
+              aria-label={`刪除 ${formatWhen(recording.endedAt)} 的錄影`}
+              title={confirming === recording.id ? '再按一次確認刪除' : '刪除錄影'}
+              onClick={() => void remove(recording.id)}
+              onBlur={() => setConfirming((id) => (id === recording.id ? null : id))}
+            >
+              {confirming === recording.id ? '確認刪除' : '🗑'}
+            </button>
           </li>
         ))}
       </ul>

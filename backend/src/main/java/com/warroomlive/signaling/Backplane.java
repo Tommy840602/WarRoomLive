@@ -64,11 +64,24 @@ public interface Backplane {
      * assigns the host: the peer that opens the room, or a replacement whenever
      * the recorded host is no longer a member.
      *
+     * @param subject the authenticated identity behind the peer, or null when the
+     *                deployment has no identity provider. Kept out of
+     *                {@link PeerInfo} on purpose — the room needs to see names,
+     *                not everyone else's account identifiers.
      * @return the room's member count after registering (1 ⇒ this join opened the
      *         room), {@link #REGISTER_REJECTED} if the room is full, or
      *         {@link #REGISTER_LOCKED} if it is locked
      */
-    int tryRegister(String room, String peerId, String name, int maxRoomSize);
+    int tryRegister(String room, String peerId, String name, String subject, int maxRoomSize);
+
+    /**
+     * The authenticated identity behind a peer, if there is one.
+     *
+     * <p>This is what lets a decision be made about <em>who</em> a peer is from
+     * outside the connection that carries it — an HTTP request, say, which knows
+     * a subject but no peer id.
+     */
+    Optional<String> subjectOf(String room, String peerId);
 
     /**
      * Removes a peer from the cluster directory. If the departing peer was the
