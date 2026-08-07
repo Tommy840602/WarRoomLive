@@ -1,10 +1,10 @@
 import { defineConfig } from 'vitest/config'
 
-// jsdom gives the tests a `window.location` (the signaling URL derives from the
+// happy-dom gives the tests a `window.location` (the signaling URL derives from the
 // page origin) and a DOM for component-level tests.
 export default defineConfig({
   test: {
-    environment: 'jsdom',
+    environment: 'happy-dom',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
 })
