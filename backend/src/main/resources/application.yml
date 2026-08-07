@@ -38,6 +38,15 @@ warroomlive:
     # throttled; excess gets 429 with Retry-After. Health, the auth bootstrap and
     # the self-authenticating LiveKit webhook are exempt.
     max-requests-per-second: ${API_MAX_REQUESTS_PER_SECOND:20}
+  attachments:
+    # Files shared into a room. Uploads and downloads go straight between the
+    # browser and the object store through presigned URLs under this prefix (see
+    # the /objects/ location in nginx.conf), so no file byte passes through this
+    # server. Requires the same object store as recordings; without it the
+    # endpoints 404. The cap is enforced twice — before signing, against what the
+    # caller declares, and at confirmation, against what actually landed.
+    public-prefix: ${ATTACHMENT_PATH_PREFIX:/objects}
+    max-bytes: ${ATTACHMENT_MAX_BYTES:26214400}
   chat:
     # How many recent messages to retain per room (in-memory) and replay on join.
     history-limit: 100
@@ -76,6 +85,7 @@ warroomlive:
     chat-days: ${RETENTION_CHAT_DAYS:0}
     audit-days: ${RETENTION_AUDIT_DAYS:0}
     published-events-days: ${RETENTION_PUBLISHED_EVENTS_DAYS:0}
+    attachments-days: ${RETENTION_ATTACHMENTS_DAYS:0}
     interval-ms: ${RETENTION_INTERVAL_MS:3600000}
     initial-delay-ms: ${RETENTION_INITIAL_DELAY_MS:60000}
 

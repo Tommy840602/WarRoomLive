@@ -1,5 +1,7 @@
 package com.warroomlive.retention;
 
+import com.warroomlive.attachments.AttachmentEntity;
+import com.warroomlive.attachments.AttachmentStore;
 import com.warroomlive.recordings.RecordingEntity;
 import com.warroomlive.recordings.RecordingStore;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -19,8 +21,9 @@ import java.util.List;
 /**
  * Deletes data that has outlived its retention period.
  *
- * <p>Everything durable here grew without bound: recordings and their MP4s, chat
- * and its search projection, the audit trail, published outbox rows. Only the
+ * <p>Everything durable here grew without bound: recordings and their MP4s,
+ * shared files and theirs, chat and its search projection, the audit trail,
+ * published outbox rows. Only the
  * CRDT log compacts itself. For a meeting product that is not only a storage
  * bill — recordings and transcripts of people's meetings kept forever are a
  * privacy and compliance problem, and "we never delete anything" is not an
@@ -52,6 +55,7 @@ public class RetentionService {
 
     private final EntityManager entityManager;
     private final RecordingStore recordings;
+    private final AttachmentStore attachments;
     private final TransactionTemplate tx;
     private final MeterRegistry metrics;
 
@@ -59,24 +63,29 @@ public class RetentionService {
     private final Duration chatRetention;
     private final Duration auditRetention;
     private final Duration publishedEventRetention;
+    private final Duration attachmentRetention;
 
     public RetentionService(
             EntityManager entityManager,
             RecordingStore recordings,
+            AttachmentStore attachments,
             TransactionTemplate tx,
             MeterRegistry metrics,
             @Value("${warroomlive.retention.recordings-days:0}") int recordingDays,
             @Value("${warroomlive.retention.chat-days:0}") int chatDays,
             @Value("${warroomlive.retention.audit-days:0}") int auditDays,
-            @Value("${warroomlive.retention.published-events-days:0}") int publishedEventDays) {
+            @Value("${warroomlive.retention.published-events-days:0}") int publishedEventDays,
+            @Value("${warroomlive.retention.attachments-days:0}") int attachmentDays) {
         this.entityManager = entityManager;
         this.recordings = recordings;
+        this.attachments = attachments;
         this.tx = tx;
         this.metrics = metrics;
         this.recordingRetention = Duration.ofDays(recordingDays);
         this.chatRetention = Duration.ofDays(chatDays);
         this.auditRetention = Duration.ofDays(auditDays);
         this.publishedEventRetention = Duration.ofDays(publishedEventDays);
+        this.attachmentRetention = Duration.ofDays(attachmentDays);
     }
 
     /**
@@ -89,6 +98,7 @@ public class RetentionService {
     public void sweep() {
         try {
             purgeRecordings();
+            purgeAttachments();
             purgeChat();
             purgeAudit();
             purgePublishedEvents();
@@ -128,6 +138,36 @@ public class RetentionService {
             }
         }
         report("recordings", removed, recordingRetention);
+        return removed;
+    }
+
+    /** Shared files expire the same way recordings do: object, then row. */
+    int purgeAttachments() {
+        if (attachmentRetention.isZero()) {
+            return 0;
+        }
+        Instant cutoff = Instant.now().minus(attachmentRetention);
+        int removed = 0;
+        for (int pass = 0; pass < MAX_BATCHES; pass++) {
+            List<AttachmentEntity> expired = attachments.expiredBefore(cutoff, BATCH);
+            if (expired.isEmpty()) {
+                break;
+            }
+            int deletedThisPass = 0;
+            for (AttachmentEntity attachment : expired) {
+                if (attachments.delete(attachment, "retention", "system")) {
+                    deletedThisPass++;
+                } else {
+                    log.warn("Keeping file {} — its object could not be removed; will retry",
+                            attachment.getObjectKey());
+                }
+            }
+            removed += deletedThisPass;
+            if (deletedThisPass == 0) {
+                break;
+            }
+        }
+        report("attachments", removed, attachmentRetention);
         return removed;
     }
 
