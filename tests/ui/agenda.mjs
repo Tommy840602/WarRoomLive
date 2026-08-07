@@ -16,10 +16,25 @@ const open = async (page) => {
   await agenda(page).locator('.capture__line').waitFor({ state: 'visible' })
 }
 
-/** The whole item, as one line — the point of the capture. */
+/**
+ * The whole item, as one line — the point of the capture.
+ *
+ * The button is only enabled once React has parsed the line, so wait for that
+ * rather than clicking into a 30-second actionability timeout that reports
+ * "not enabled" and says nothing about why.
+ */
 const capture = async (page, line) => {
   await agenda(page).locator('.capture__line').fill(line)
+  await agenda(page).locator('.capture__go:not([disabled])').waitFor({ timeout: 10000 })
   await agenda(page).locator('.capture__go').click()
+  // The panel clears the line only after the write and its refetch, so the
+  // preview outlives the new row for a moment. Anything counting chips has to
+  // let that settle or it counts the preview's.
+  await agenda(page).locator('.capture__line').filter({ hasNotText: /./ }).first()
+    .waitFor({ timeout: 15000 }).catch(() => {})
+  await page.waitForFunction(
+    () => (document.querySelector('[data-panel="agenda"] .capture__line')?.value ?? '') === '',
+    null, { timeout: 15000 })
 }
 
 /** Which band a piece of text ended up in. */
@@ -70,7 +85,9 @@ await alice.waitForFunction(
 ok((await agenda(alice).locator('.chip--who').allInnerTexts()).includes('@Bob'),
   'the assignee was lifted out of the line')
 // The span is what stamps an item as an appointment; without it, a task.
-const stamps = await agenda(alice).locator('.chip--stamp').allInnerTexts()
+// Scoped to the rows: the capture preview carries the same chip, and counting
+// it would answer a different question.
+const stamps = await agenda(alice).locator('.row .chip--stamp').allInnerTexts()
 ok(stamps.length === 1 && stamps[0] === '約會',
   `only the line that named a span became an appointment (${stamps.join('/')})`)
 

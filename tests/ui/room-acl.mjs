@@ -10,6 +10,15 @@ const host = await joinRoom(browser, { room, name: 'Host' })
 const guest = await joinRoom(browser, { room, name: 'Guest' })
 await sleep(3000)
 
+// One sidebar panel is open at a time, and the default is chat — so the member
+// list has to be opened before anything can be seen on it. A `.count()` would
+// pass regardless, since a hidden element is still an element; that is exactly
+// why the visibility waits below are the ones worth having.
+for (const page of [host, guest]) {
+  await page.locator('.sidebar__tab', { hasText: '成員' }).click()
+  await page.locator('.members__title').waitFor({ state: 'visible', timeout: 10000 })
+}
+
 // --- Affordances differ by role.
 ok(await host.locator('.members__host').count() === 1, 'the host sees exactly one crown')
 ok(await guest.locator('.members__host').count() === 1, 'the guest sees the crown too (same host)')

@@ -105,9 +105,15 @@
   position: relative;
 }
 
+/* The tile size is the tile size. With `1fr` the column stretched to fill the
+   row, so with one or two people the zoom control changed the number of columns
+   and nothing a viewer could see — a control that does nothing in the common
+   case. Now --tile-min is the width, capped at the row so a large step cannot
+   overflow a narrow stage, and the tiles centre in whatever is left over. */
 .video-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--tile-min, 240px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(0, min(var(--tile-min, 240px), 100%)));
+  justify-content: center;
   gap: 1rem;
 }
 
@@ -1816,10 +1822,9 @@ body.is-resizing {
     margin-top: 1rem;
   }
 
-  /* Two tiles across in landscape, one in portrait — 160px is about the
-     smallest a face is still recognisable at. */
+  /* The tile size still comes from --tile-min, so the zoom control works here
+     too; only the breathing room shrinks. */
   .video-grid {
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 0.5rem;
   }
 
