@@ -223,7 +223,25 @@ tests/dr/restore-s3-drill.sh
 
 以上皆不在 CI 跑,需對著實際跑起來的 stack 手動執行。
 
-## 正式對外:HTTPS(TLS 反向代理)
+## 部署到已經有其他站台的機器
+
+機器上 `:80`/`:443` 已經被別的站台的 reverse proxy 佔著時,用 `docker-compose.prod.yml`
+而**不是** TLS 疊加層——後者會自己起一個 Caddy 綁那兩個 port,直接相撞。
+
+```bash
+cp .env.prod.example .env.prod && chmod 600 .env.prod   # DB_PASSWORD 必填
+docker compose --env-file .env.prod \
+  -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+- frontend **只綁 loopback**,由既有的 edge 轉進來;`infrastructure/edge/` 有 Caddy 與 nginx 兩份 site 設定可以直接抄。
+- 少了 `DB_PASSWORD` 或 `PUBLIC_ORIGIN` 會**拒絕啟動**——這個 repo 到處是開發用預設密碼,用預設值跑在公開位址上不該因為「忘了」而發生。
+- **多一層 proxy 會打壞 REST 限流**:後端取 `X-Forwarded-For` 的最後一段(單層拓撲下那是唯一偽造不了的),多一跳之後那段變成 edge 的位址,全世界共用一個額度。這個疊加層會掛上 `infrastructure/edge/real-ip.conf` 修正,runbook 裡有驗證指令。
+- **媒體不走 edge**(SRTP/UDP,proxy 代理不了):mesh 不需要額外開 port,TURN 與 SFU 需要。
+
+完整步驟(DNS、憑證、防火牆、升級、備份)見 [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)。
+
+## 正式對外:HTTPS(TLS 反向代理,WarRoomLive 獨佔整台機器時)
 
 用 Caddy 當邊緣代理,自動取得憑證。這是**選用的疊加層**(`docker-compose.tls.yml`),不影響上面的簡易部署。
 

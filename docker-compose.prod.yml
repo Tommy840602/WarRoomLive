@@ -1,0 +1,61 @@
+# Production overlay for a host that ALREADY has a reverse proxy on :80/:443.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# This is the deliberate alternative to docker-compose.tls.yml. That overlay
+# brings its own Caddy and binds :80/:443, which is right when WarRoomLive owns
+# the host; here it would collide with whatever already terminates TLS for the
+# other sites. So the edge stays where it is and this stack simply offers it a
+# port to proxy to.
+#
+# The frontend is published on LOOPBACK ONLY. On a shared host the container
+# port is otherwise reachable from the internet, which would serve the whole app
+# over plaintext HTTP beside the TLS the edge is providing — and getUserMedia
+# would fail there, so the insecure door is also the broken one.
+#
+# Required env (see .env.prod.example): DB_PASSWORD, PUBLIC_ORIGIN.
+services:
+  db:
+    restart: unless-stopped
+    environment:
+      # No default: deploying with the development password is not a thing that
+      # should be possible by omission.
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env.prod}
+
+  backend:
+    restart: unless-stopped
+    environment:
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env.prod}
+      # The base stack allows any origin because it is a local development
+      # convenience. In production the WebSocket handshake accepts one host.
+      WARROOMLIVE_SIGNALING_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN in .env.prod}
+      # Retention is off by default (every period means "keep forever"). Choose
+      # per data type; see docs/runbooks/deployment.md.
+      RETENTION_RECORDINGS_DAYS: ${RETENTION_RECORDINGS_DAYS:-0}
+      RETENTION_ATTACHMENTS_DAYS: ${RETENTION_ATTACHMENTS_DAYS:-0}
+      RETENTION_CHAT_DAYS: ${RETENTION_CHAT_DAYS:-0}
+      RETENTION_AGENDA_DAYS: ${RETENTION_AGENDA_DAYS:-0}
+      RETENTION_AUDIT_DAYS: ${RETENTION_AUDIT_DAYS:-0}
+      RETENTION_PUBLISHED_EVENTS_DAYS: ${RETENTION_PUBLISHED_EVENTS_DAYS:-0}
+
+  collab:
+    restart: unless-stopped
+    environment:
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env.prod}
+
+  frontend:
+    restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:${WARROOM_PORT:-8088}:80"
+    volumes:
+      # Teaches this nginx that the address in X-Forwarded-For is the real
+      # client, so the header it passes on ends with the browser rather than
+      # with the edge. Without it the backend's per-caller rate limit — which
+      # reads the LAST entry, correctly, for the single-proxy topology — would
+      # see one address for the entire internet and throttle everyone the
+      # moment any one person bursts.
+      #
+      # Only mounted here, and only trusting the edge: in the base stack the
+      # frontend port is public, and trusting a forwarded header there would let
+      # any caller claim any address.
+      - ./infrastructure/edge/real-ip.conf:/etc/nginx/conf.d/00-real-ip.conf:ro
