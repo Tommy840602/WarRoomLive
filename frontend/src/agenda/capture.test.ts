@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseCapture, relativeTime, urgencyOf } from './capture'
+import { parseCapture, relativeTime } from './capture'
 
 // A fixed Wednesday afternoon, so weekday and rollover cases are stable.
 const NOW = new Date(2026, 7, 5, 14, 30, 0) // 2026-08-05 14:30 local, a Wednesday
@@ -129,21 +129,43 @@ describe('relativeTime', () => {
   })
 })
 
-describe('urgencyOf', () => {
-  const iso = (ms: number) => new Date(NOW.getTime() + ms).toISOString()
-
-  it('bands by how close the deadline is', () => {
-    expect(urgencyOf(iso(-1000), false, NOW)).toBe('overdue')
-    expect(urgencyOf(iso(3 * 3_600_000), false, NOW)).toBe('soon')
-    expect(urgencyOf(iso(5 * 86_400_000), false, NOW)).toBe('later')
+describe('parseCapture spans', () => {
+  it('reads a span as a start and an end', () => {
+    const out = at('與法務對齊 明天14:00-15:00')
+    expect(out.text).toBe('與法務對齊')
+    expect(local(out.dueAt!).getHours()).toBe(14)
+    expect(local(out.endAt!).getHours()).toBe(15)
   })
 
-  it('never calls a finished item late', () => {
-    // Colouring a completed task red trains people to ignore the colour.
-    expect(urgencyOf(iso(-86_400_000), true, NOW)).toBe('none')
+  it('does not strand the second half of a span in the text', () => {
+    // The single-time pattern would eat `14:00` and leave `-15:00` behind,
+    // which is exactly the silent damage this parser must never do.
+    expect(at('週會 14:00-15:00').text).toBe('週會')
   })
 
-  it('has nothing to say without a deadline', () => {
-    expect(urgencyOf(undefined, false, NOW)).toBe('none')
+  it('accepts the dashes and tildes people actually type', () => {
+    for (const line of ['週會 14:00–15:00', '週會 14:00~15:00', '週會 14:00 - 15:00',
+      '週會 14:00至15:00', '週會 14點-15點']) {
+      const out = at(line)
+      expect(out.endAt, line).toBeDefined()
+      expect(out.text, line).toBe('週會')
+    }
+  })
+
+  it('rolls an end before the start over midnight rather than inverting it', () => {
+    // 23:00–01:00 is a real span, and an inverted one is refused by the server.
+    const out = at('值班 23:00-01:00')
+    expect(new Date(out.endAt!).getTime()).toBeGreaterThan(new Date(out.dueAt!).getTime())
+    expect(local(out.endAt!).getHours()).toBe(1)
+  })
+
+  it('leaves an impossible span in the text', () => {
+    const out = at('週會 14:00-99:00')
+    expect(out.text).toContain('99:00')
+    expect(out.endAt).toBeUndefined()
+  })
+
+  it('gives a plain time no end at all', () => {
+    expect(at('寄簡報 明天15:00').endAt).toBeUndefined()
   })
 })

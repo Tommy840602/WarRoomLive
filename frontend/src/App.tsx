@@ -19,8 +19,7 @@ import { MemberList, type Member } from './components/MemberList'
 import { RecordingsPanel, type Recording } from './components/RecordingsPanel'
 import { FilesPanel } from './components/FilesPanel'
 import { SearchPanel, SEARCH_PAGE_SIZE, type SearchHit } from './components/SearchPanel'
-import { TodoPanel } from './components/TodoPanel'
-import { CalendarPanel } from './components/CalendarPanel'
+import { AgendaPanel } from './components/AgendaPanel'
 import { ReactionBar } from './components/ReactionBar'
 import { ThemeToggle } from './components/ThemeToggle'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
@@ -34,6 +33,7 @@ import type {
   Todo,
 } from './signaling/types'
 import type { PeerQuality } from './webrtc/quality'
+import type { AgendaItem, Triage } from './agenda/item'
 import { useAuth } from './auth/AuthGate'
 import { useTheme } from './theme/useTheme'
 import './App.css'
@@ -54,7 +54,7 @@ interface ChatEntry {
 }
 
 /** The side panels, one of which is open at a time. */
-type SidebarTab = 'members' | 'todos' | 'calendar' | 'recordings' | 'search' | 'files' | 'chat'
+type SidebarTab = 'members' | 'agenda' | 'recordings' | 'search' | 'files' | 'chat'
 
 export default function App() {
   const { token, displayName: authName } = useAuth()
@@ -351,13 +351,25 @@ export default function App() {
     await loadFiles(roomName)
   }, [loadFiles])
 
-  /** Loads the room's shared to-do list and calendar. */
+  /**
+   * Loads the room's agenda: both feeds, merged into one board by the panel.
+   *
+   * The calendar is read from a week back rather than from now. Its endpoint
+   * defaults to "what is coming", which is right for a calendar and wrong for a
+   * board — an entry whose time has passed belongs in 完成, and fetching only
+   * the future would make it vanish the moment it mattered least. A week is the
+   * window a room in session still refers back to; older than that is history,
+   * and history is not what this panel is for.
+   */
   const loadAgenda = useCallback(async (roomName: string) => {
     const room = encodeURIComponent(roomName)
+    const from = new Date(Date.now() - 7 * 86_400_000).toISOString()
     try {
       const [todoRes, calendarRes] = await Promise.all([
         fetch(`/api/todos/${room}`, { headers: authHeaders() }),
-        fetch(`/api/calendar/${room}`, { headers: authHeaders() }),
+        fetch(`/api/calendar/${room}?from=${encodeURIComponent(from)}`, {
+          headers: authHeaders(),
+        }),
       ])
       setAgendaAvailable(todoRes.ok && calendarRes.ok)
       setTodos(todoRes.ok ? ((await todoRes.json()) as Todo[]) : [])
@@ -397,42 +409,62 @@ export default function App() {
 
   const roomPath = () => encodeURIComponent(joinedAsRef.current?.room ?? '')
 
-  const addTodo = useCallback(
-    (text: string, assignee: string, dueAt: string) =>
-      agendaWrite(`/api/todos/${roomPath()}`, {
-        method: 'POST',
-        // Already an instant: the capture line parsed it against the local
-        // clock, so no further conversion belongs here.
-        body: JSON.stringify({ text, assignee, dueAt }),
-      }),
+  /**
+   * Files a captured line as whatever it described.
+   *
+   * The panel has one input because the room has one agenda, but the database
+   * still keeps appointments and tasks in two tables, and *something* has to
+   * choose. The rule is the one the user can see: a line that named a span
+   * (`14:00-15:00`) described a thing that occupies time, so it becomes a
+   * calendar entry; everything else becomes a task. The preview says which,
+   * before it is sent, so the choice is never made behind anyone's back.
+   */
+  const addAgendaItem = useCallback(
+    (captured: { text: string; assignee?: string; dueAt?: string; endAt?: string }) =>
+      captured.endAt
+        ? agendaWrite(`/api/calendar/${roomPath()}`, {
+            method: 'POST',
+            body: JSON.stringify({
+              title: captured.text,
+              startsAt: captured.dueAt,
+              endsAt: captured.endAt,
+            }),
+          })
+        : agendaWrite(`/api/todos/${roomPath()}`, {
+            method: 'POST',
+            // Already an instant: the capture line parsed it against the local
+            // clock, so no further conversion belongs here.
+            body: JSON.stringify({
+              text: captured.text,
+              assignee: captured.assignee ?? '',
+              dueAt: captured.dueAt ?? '',
+            }),
+          }),
     [agendaWrite],
   )
 
-  const toggleTodo = useCallback(
-    (id: number, done: boolean) =>
-      agendaWrite(`/api/todos/${roomPath()}/${id}`, {
+  /**
+   * Moves an item between sections.
+   *
+   * One request for both tables, because triage is one idea. The server turns
+   * `DONE` into a completion with a time and an author rather than storing the
+   * word — see `Triage` on the backend.
+   */
+  const setAgendaTriage = useCallback(
+    (item: AgendaItem, triage: Triage | 'auto') =>
+      agendaWrite(`/api/${item.kind === 'todo' ? 'todos' : 'calendar'}/${roomPath()}/${item.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ done }),
+        body: JSON.stringify({ triage: triage.toUpperCase() }),
       }),
     [agendaWrite],
   )
 
-  const deleteTodo = useCallback(
-    (id: number) => agendaWrite(`/api/todos/${roomPath()}/${id}`, { method: 'DELETE' }),
-    [agendaWrite],
-  )
-
-  const addCalendarEvent = useCallback(
-    (title: string, startsAt: string, endsAt: string) =>
-      agendaWrite(`/api/calendar/${roomPath()}`, {
-        method: 'POST',
-        body: JSON.stringify({ title, startsAt, endsAt }),
-      }),
-    [agendaWrite],
-  )
-
-  const deleteCalendarEvent = useCallback(
-    (id: number) => agendaWrite(`/api/calendar/${roomPath()}/${id}`, { method: 'DELETE' }),
+  const deleteAgendaItem = useCallback(
+    (item: AgendaItem) =>
+      agendaWrite(
+        `/api/${item.kind === 'todo' ? 'todos' : 'calendar'}/${roomPath()}/${item.id}`,
+        { method: 'DELETE' },
+      ),
     [agendaWrite],
   )
 
@@ -695,7 +727,7 @@ export default function App() {
     const panels: { id: SidebarTab; label: string }[] = []
     if (status === 'in-room') panels.push({ id: 'members', label: '成員' })
     if (status === 'in-room' && agendaAvailable) {
-      panels.push({ id: 'todos', label: '待辦' }, { id: 'calendar', label: '行事曆' })
+      panels.push({ id: 'agenda', label: '議程' })
     }
     if (status === 'in-room' && recordings.length > 0) {
       panels.push({ id: 'recordings', label: '錄影' })
@@ -928,21 +960,13 @@ export default function App() {
             </div>
           )}
           {status === 'in-room' && agendaAvailable && (
-            <div className="sidebar__panel" data-panel="todos">
-              <TodoPanel
+            <div className="sidebar__panel" data-panel="agenda">
+              <AgendaPanel
                 todos={todos}
-                onAdd={addTodo}
-                onToggle={toggleTodo}
-                onDelete={deleteTodo}
-              />
-            </div>
-          )}
-          {status === 'in-room' && agendaAvailable && (
-            <div className="sidebar__panel" data-panel="calendar">
-              <CalendarPanel
                 events={calendar}
-                onAdd={addCalendarEvent}
-                onDelete={deleteCalendarEvent}
+                onAdd={addAgendaItem}
+                onTriage={setAgendaTriage}
+                onDelete={deleteAgendaItem}
               />
             </div>
           )}

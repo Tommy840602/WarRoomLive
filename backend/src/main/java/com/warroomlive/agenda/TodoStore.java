@@ -67,6 +67,22 @@ public class TodoStore {
         });
     }
 
+    /**
+     * Files the item under NOW or LATER, or hands it back to the clock (null).
+     *
+     * <p>No event: triage is an opinion about attention that a room revises all
+     * the time, and the backbone is for facts about the work. Completion, which
+     * <em>is</em> such a fact, keeps its own events.
+     */
+    @Transactional
+    public Optional<TodoEntity> setTriage(String room, long id, Triage triage) {
+        return find(room, id).map(todo -> {
+            todo.setTriage(triage);
+            repository.save(todo);
+            return todo;
+        });
+    }
+
     @Transactional
     public boolean delete(String room, long id, String actor) {
         Optional<TodoEntity> todo = find(room, id);

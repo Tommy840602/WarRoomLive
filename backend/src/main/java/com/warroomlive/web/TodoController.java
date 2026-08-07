@@ -3,6 +3,7 @@ package com.warroomlive.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.warroomlive.agenda.TodoEntity;
 import com.warroomlive.agenda.TodoStore;
+import com.warroomlive.agenda.Triage;
 import com.warroomlive.signaling.SignalMessage;
 import com.warroomlive.signaling.SignalingHandler;
 import org.springframework.beans.factory.ObjectProvider;
@@ -62,8 +63,15 @@ public class TodoController {
     public record CreateRequest(String text, String assignee, String dueAt) {
     }
 
-    /** Every field optional: a PATCH says what changed, not what everything is. */
-    public record UpdateRequest(String text, String assignee, String dueAt, Boolean done) {
+    /**
+     * Every field optional: a PATCH says what changed, not what everything is.
+     *
+     * <p>{@code triage} carries {@code "NOW"}, {@code "LATER"}, {@code "DONE"} or
+     * {@code "auto"}; DONE becomes a completion rather than a stored word, for
+     * the reason in {@link com.warroomlive.agenda.Triage}.
+     */
+    public record UpdateRequest(String text, String assignee, String dueAt, Boolean done,
+            String triage) {
     }
 
     @GetMapping("/{room}")
@@ -98,6 +106,10 @@ public class TodoController {
         TodoEntity current = store().byId(room, id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "no such item"));
 
+        // Parsed before anything is written, so a bad triage does not leave the
+        // edit half-applied.
+        Triage triage = parseTriage(request.triage());
+
         TodoEntity updated = current;
         if (request.text() != null || request.assignee() != null || request.dueAt() != null) {
             String text = request.text() == null ? current.getText() : requireText(request.text());
@@ -107,11 +119,37 @@ public class TodoController {
                     ? current.getDueAt() : parseInstant(request.dueAt(), "dueAt");
             updated = store().edit(room, id, text, assignee, dueAt, actor).orElse(current);
         }
-        if (request.done() != null) {
-            updated = store().setDone(room, id, request.done(), actor).orElse(updated);
-        }
+        updated = applyTriage(room, id, request.done(), request.triage(), triage, updated, actor);
         announce(room);
         return describe(updated);
+    }
+
+    /**
+     * Applies completion and triage, which are the same request seen twice.
+     *
+     * <p>{@code triage: "DONE"} is turned into a completion rather than stored:
+     * "done" is a fact about the work, with a time and an author, and writing the
+     * word into the triage column as well would give the dashboard two copies to
+     * disagree over. Anything else is filed as an opinion, and {@code "auto"}
+     * hands the item back to the clock.
+     *
+     * <p>Marking a finished item NOW or LATER also reopens it, because that is
+     * plainly what someone means by moving it back onto the board.
+     */
+    private TodoEntity applyTriage(String room, long id, Boolean done, String rawTriage,
+            Triage triage, TodoEntity fallback, String actor) {
+        TodoEntity out = fallback;
+        boolean wantsDone = "DONE".equalsIgnoreCase(rawTriage);
+        if (done != null || wantsDone) {
+            boolean target = wantsDone || Boolean.TRUE.equals(done);
+            out = store().setDone(room, id, target, actor).orElse(out);
+        } else if (rawTriage != null && out.isDone()) {
+            out = store().setDone(room, id, false, actor).orElse(out);
+        }
+        if (rawTriage != null && !wantsDone) {
+            out = store().setTriage(room, id, triage).orElse(out);
+        }
+        return out;
     }
 
     @DeleteMapping("/{room}/{id}")
@@ -170,6 +208,25 @@ public class TodoController {
         }
     }
 
+    /**
+     * Parses a triage word, or null for "let the clock decide again".
+     *
+     * <p>DONE also maps to null here: it is never stored, so the caller handles
+     * it as a completion and this returns nothing to file. A word we do not know
+     * is a caller bug, not an instruction to guess.
+     */
+    static Triage parseTriage(String value) {
+        if (value == null || value.equalsIgnoreCase("DONE")) {
+            return null;
+        }
+        try {
+            return Triage.parse(value);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "triage must be NOW, LATER, DONE or auto");
+        }
+    }
+
     private TodoStore store() {
         TodoStore store = todos.getIfAvailable();
         if (store == null) {
@@ -192,6 +249,12 @@ public class TodoController {
         }
         if (todo.getDueAt() != null) {
             out.put("dueAt", todo.getDueAt().toString());
+        }
+        // Absent rather than null when nobody has overruled the clock: the
+        // dashboard's rule is "no stored triage means work it out from the
+        // time", and an explicit null in the payload invites the opposite.
+        if (todo.getTriage() != null) {
+            out.put("triage", todo.getTriage().name());
         }
         if (todo.getCompletedAt() != null) {
             out.put("completedAt", todo.getCompletedAt().toString());

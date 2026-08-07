@@ -271,8 +271,7 @@
 }
 
 .sidebar[data-active='members'] .sidebar__panel[data-panel='members'],
-.sidebar[data-active='todos'] .sidebar__panel[data-panel='todos'],
-.sidebar[data-active='calendar'] .sidebar__panel[data-panel='calendar'],
+.sidebar[data-active='agenda'] .sidebar__panel[data-panel='agenda'],
 .sidebar[data-active='recordings'] .sidebar__panel[data-panel='recordings'],
 .sidebar[data-active='search'] .sidebar__panel[data-panel='search'],
 .sidebar[data-active='files'] .sidebar__panel[data-panel='files'],
@@ -1011,14 +1010,23 @@
   cursor: default;
 }
 
-/* --- Agenda: the shared list and the calendar ----------------------------
-   Both are the same shape, because to a room they are the same act — something
-   we said we would do, and when. Every row leads with a relative-time rail in
-   the same column, so the panel is read down that column rather than across
-   each line. That rail is the one loud thing here; everything else is quiet. */
+/* --- Agenda: one board -----------------------------------------------------
+   There is no list and no calendar here, only items and three bands that say
+   when the room means to deal with them. The bands are the structure — the eye
+   should land on 現在 and stop — so they carry a left rule in the accent and
+   everything inside them stays quiet. The triage control is the one thing on a
+   row with any weight, because moving an item between bands is the act this
+   board exists for. */
 
+/* A card, like every other side panel. The sticky band headings paint over
+   the rows as they scroll under, so they need the same ground the panel has —
+   on the page background they read as stripes laid across it instead. */
 .agenda {
-  border-top: 1px solid var(--line);
+  transition: var(--skin-fade);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1038,6 +1046,33 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-dim);
+}
+
+/* Two views of one agenda, so this reads as a switch and not as navigation. */
+.agenda__views {
+  display: inline-flex;
+  gap: 0.1rem;
+}
+
+.agenda__view {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.72rem;
+  font-family: inherit;
+}
+
+.agenda__view:hover {
+  color: var(--ink-dim);
+}
+
+.agenda__view[aria-pressed='true'] {
+  color: var(--ink-dim);
+  border-bottom-color: var(--line-strong);
 }
 
 .agenda__count {
@@ -1117,26 +1152,53 @@
   color: var(--ink);
 }
 
-.capture__read--needs .capture__read-label {
-  color: var(--warn);
-}
+/* --- Bands --- */
 
-.capture__read-hint {
-  color: var(--ink-faint);
-}
-
-/* --- Rows --- */
-
-.agenda__list,
-.day__entries {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.agenda__list {
+.board {
   overflow-y: auto;
-  max-height: 44vh;
+  max-height: 46vh;
+}
+
+.band {
+  padding-bottom: 0.35rem;
+}
+
+/* The accent rule is the whole hierarchy: 現在 is the band you are meant to
+   read, so only it is drawn in the accent. Giving all three a colour would be
+   three emphases, which is none. */
+.band__label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.5rem 0.9rem 0.2rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
+.band--now .band__label {
+  color: var(--accent);
+}
+
+.band--now {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.band__count {
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
+.band__empty {
+  margin: 0;
+  padding: 0 0.9rem 0.4rem;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
 }
 
 .agenda__empty,
@@ -1154,41 +1216,18 @@
   color: var(--danger);
 }
 
+/* --- Rows --- */
+
 .row {
   display: grid;
-  /* check | time rail | body | drop — the rail is a fixed column so the times
-     line up between rows and the eye can run down it. */
-  grid-template-columns: auto 5.5rem 1fr auto;
+  grid-template-columns: auto 1fr auto;
   align-items: baseline;
   gap: 0.5rem;
-  padding: 0.32rem 0.9rem;
+  padding: 0.3rem 0.9rem;
 }
 
 .row:hover {
   background: var(--surface-hover);
-}
-
-.row__check {
-  accent-color: var(--accent);
-  margin: 0;
-  align-self: center;
-}
-
-.row__when {
-  font-size: 0.72rem;
-  color: var(--ink-faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.row__when--overdue {
-  color: var(--danger);
-  font-weight: 600;
-}
-
-.row__when--soon {
-  color: var(--accent);
 }
 
 .row__body {
@@ -1211,8 +1250,8 @@
   overflow-wrap: anywhere;
 }
 
-/* A finished item stays in place but recedes — the list is about what is open,
-   and removing it would lose the record of who closed it. */
+/* A finished item stays in place but recedes — the board is about what is
+   open, and removing it would lose the record of who closed it. */
 .row--done .row__text {
   text-decoration: line-through;
   color: var(--ink-faint);
@@ -1223,19 +1262,65 @@
   border-radius: 5px;
   padding: 0.1rem 0.4rem;
   background: transparent;
-  color: var(--ink-faint);
+  color: transparent;
   cursor: pointer;
   font-size: 0.85rem;
   line-height: 1.4;
 }
 
-.row:hover .row__drop {
-  color: var(--ink-dim);
+/* Hidden until the row is under the pointer or the button has focus: a column
+   of × down the side reads as a list of things to delete. */
+.row:hover .row__drop,
+.row__drop:focus-visible {
+  color: var(--ink-faint);
 }
 
 .row__drop:hover {
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+/* --- Triage --- */
+
+.triage {
+  align-self: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 0.6rem;
+  line-height: 1;
+  padding: 0;
+}
+
+.triage:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.triage--now {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.triage--done {
+  border-color: var(--ok);
+  color: var(--ok);
+  font-size: 0.7rem;
+}
+
+/* A dashed ring means the clock is still deciding this one — the difference
+   between "nobody has looked at this" and "the room decided", which is exactly
+   what an auto-triaging board would otherwise hide. */
+.triage--auto {
+  border-style: dashed;
 }
 
 /* --- Small labels --- */
@@ -1270,22 +1355,13 @@
   padding-left: 0;
 }
 
-/* --- Calendar day grouping --- */
-
-.day__label {
-  margin: 0;
-  padding: 0.5rem 0.9rem 0.15rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  color: var(--accent);
-  position: sticky;
-  top: 0;
-  background: var(--surface);
-}
-
-.day .row {
-  grid-template-columns: 5.5rem 1fr auto;
+/* Which facets an item carries. An outline rather than a fill: a stamp is a
+   fact about the item, not a state worth shouting. */
+.chip--stamp {
+  color: var(--ink-faint);
+  border: 1px solid var(--line);
+  font-size: 0.62rem;
+  padding: 0 0.3rem;
 }
 
 /* --- Theme switch --- */
@@ -1374,13 +1450,14 @@
     gap: 0.5rem;
   }
 
-  /* The time rail costs too much of a 390px line; drop it to what fits. */
+  /* Every millimetre of a 390px line goes to the text. */
   .row {
-    grid-template-columns: auto 4.5rem 1fr auto;
     gap: 0.4rem;
+    padding-inline: 0.6rem;
   }
 
-  .day .row {
-    grid-template-columns: 4.5rem 1fr auto;
+  /* No hover on a touch screen, so the delete button has to be there already. */
+  .row__drop {
+    color: var(--ink-faint);
   }
 }

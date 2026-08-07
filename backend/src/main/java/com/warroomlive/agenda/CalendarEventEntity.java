@@ -2,6 +2,8 @@ package com.warroomlive.agenda;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -15,6 +17,10 @@ import java.time.Instant;
  * <p>Times are instants, not local dates. A cross-department room is the case
  * where two people read the same entry from different time zones, and a naive
  * timestamp is exactly the thing that makes them show up an hour apart.
+ *
+ * <p>It carries completion and triage for the same reason a to-do does: on the
+ * dashboard these are one kind of item, and an entry nobody can mark as dealt
+ * with is an entry that sits in the way forever.
  */
 @Entity
 @Table(name = "calendar_events")
@@ -46,6 +52,17 @@ public class CalendarEventEntity {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    @Column(name = "completed_at")
+    private Instant completedAt;
+
+    @Column(name = "completed_by")
+    private String completedBy;
+
+    /** Null means the clock decides; a value means somebody disagreed with it. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "triage", length = 8)
+    private Triage triage;
+
     protected CalendarEventEntity() {
     }
 
@@ -65,6 +82,43 @@ public class CalendarEventEntity {
         this.description = description == null ? "" : description;
         this.startsAt = startsAt;
         this.endsAt = endsAt;
+    }
+
+    /**
+     * Marks the entry dealt with, or not.
+     *
+     * <p>Same rule as a to-do: re-completing keeps the original time and author,
+     * so a second click cannot rewrite who closed it.
+     */
+    public void setDone(boolean done, String actor) {
+        if (!done) {
+            this.completedAt = null;
+            this.completedBy = null;
+        } else if (this.completedAt == null) {
+            this.completedAt = Instant.now();
+            this.completedBy = actor;
+        }
+    }
+
+    public boolean isDone() {
+        return completedAt != null;
+    }
+
+    /** Null hands the entry back to the clock. */
+    public void setTriage(Triage triage) {
+        this.triage = triage;
+    }
+
+    public Triage getTriage() {
+        return triage;
+    }
+
+    public Instant getCompletedAt() {
+        return completedAt;
+    }
+
+    public String getCompletedBy() {
+        return completedBy;
     }
 
     public Long getId() {

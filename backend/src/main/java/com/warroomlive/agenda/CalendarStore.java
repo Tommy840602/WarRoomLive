@@ -49,6 +49,30 @@ public class CalendarStore {
         });
     }
 
+    /** Same contract as {@link TodoStore#setDone}: only a real transition is an event. */
+    @Transactional
+    public Optional<CalendarEventEntity> setDone(String room, long id, boolean done, String actor) {
+        return find(room, id).map(event -> {
+            boolean was = event.isDone();
+            event.setDone(done, actor);
+            repository.save(event);
+            if (was != event.isDone()) {
+                record(done ? "calendar.event.completed" : "calendar.event.reopened", event, actor);
+            }
+            return event;
+        });
+    }
+
+    /** Same contract as {@link TodoStore#setTriage}: an opinion, so no event. */
+    @Transactional
+    public Optional<CalendarEventEntity> setTriage(String room, long id, Triage triage) {
+        return find(room, id).map(event -> {
+            event.setTriage(triage);
+            repository.save(event);
+            return event;
+        });
+    }
+
     @Transactional
     public boolean delete(String room, long id, String actor) {
         Optional<CalendarEventEntity> event = find(room, id);

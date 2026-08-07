@@ -2,6 +2,8 @@ package com.warroomlive.agenda;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -49,6 +51,11 @@ public class TodoEntity {
     @Column(name = "completed_by")
     private String completedBy;
 
+    /** Null means the clock decides; a value means somebody disagreed with it. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "triage", length = 8)
+    private Triage triage;
+
     protected TodoEntity() {
     }
 
@@ -81,6 +88,15 @@ public class TodoEntity {
         this.text = text;
         this.assignee = assignee;
         this.dueAt = dueAt;
+    }
+
+    /** Null hands the item back to the clock. */
+    public void setTriage(Triage triage) {
+        this.triage = triage;
+    }
+
+    public Triage getTriage() {
+        return triage;
     }
 
     public boolean isDone() {

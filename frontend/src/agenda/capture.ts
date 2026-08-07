@@ -16,6 +16,13 @@ export interface Captured {
   assignee?: string
   /** ISO-8601 instant, or undefined when no time was named. */
   dueAt?: string
+  /**
+   * End of the span, when the line named one (`14:00-15:00`).
+   *
+   * This is what stamps an item as an appointment rather than a task: a thing
+   * with an end occupies time, and occupying time is what a meeting does.
+   */
+  endAt?: string
   /** Which fragments were consumed, so the input can show what it understood. */
   matched: string[]
 }
@@ -56,7 +63,7 @@ export function parseCapture(input: string, now: Date = new Date()): Captured {
   } else if (relativeHours) {
     // An hour offset names a moment, so it is complete on its own.
     const at = new Date(base.getTime() + Number(relativeHours[1]) * 3600_000)
-    return finish(rest, assignee, at, matched)
+    return finish(rest, assignee, at, null, matched)
   }
 
   if (!day) {
@@ -99,21 +106,45 @@ export function parseCapture(input: string, now: Date = new Date()): Captured {
   // --- Time of day. Deliberately not using \b: JavaScript's word class is
   // ASCII-only, so there is no boundary after 點, and `15點` would never match.
   // The lookaround does the same job for every script.
-  const time = take(/(?<![\d/:])(\d{1,2})[:：點点](\d{2})?(?!\d)/u)
+  //
+  // The span is tried first. Matching the single-time pattern against
+  // `14:00-15:00` would consume the start and leave `-15:00` stranded in the
+  // text, which is precisely the silent damage this parser is not allowed to do.
   let hours: number | null = null
   let minutes = 0
-  if (time) {
-    const h = Number(time[1])
-    const m = time[2] === undefined ? 0 : Number(time[2])
-    if (h <= 23 && m <= 59) {
+  let endHours: number | null = null
+  let endMinutes = 0
+
+  const span = take(
+    /(?<![\d/:])(\d{1,2})[:：點点](\d{2})?\s*[-–—~〜至到]\s*(\d{1,2})[:：點点](\d{2})?(?!\d)/u,
+  )
+  if (span) {
+    const [h, m, h2, m2] = [Number(span[1]), part(span[2]), Number(span[3]), part(span[4])]
+    if (h <= 23 && m <= 59 && h2 <= 23 && m2 <= 59) {
       hours = h
       minutes = m
+      endHours = h2
+      endMinutes = m2
     } else {
-      rest = restore(rest, time[0], matched)
+      rest = restore(rest, span[0], matched)
     }
   }
 
-  if (hours === null && !day) return finish(rest, assignee, null, matched)
+  if (hours === null) {
+    const time = take(/(?<![\d/:])(\d{1,2})[:：點点](\d{2})?(?!\d)/u)
+    if (time) {
+      const h = Number(time[1])
+      const m = part(time[2])
+      if (h <= 23 && m <= 59) {
+        hours = h
+        minutes = m
+      } else {
+        rest = restore(rest, time[0], matched)
+      }
+    }
+  }
+
+  if (hours === null && !day) return finish(rest, assignee, null, null, matched)
 
   const at = new Date(day ?? base)
   if (hours === null) {
@@ -123,14 +154,30 @@ export function parseCapture(input: string, now: Date = new Date()): Captured {
     // A bare time that has already passed means the next one, not this morning.
     if (!day && at.getTime() < base.getTime()) at.setDate(at.getDate() + 1)
   }
-  return finish(rest, assignee, at, matched)
+
+  let end: Date | null = null
+  if (endHours !== null) {
+    end = new Date(at)
+    end.setHours(endHours, endMinutes, 0, 0)
+    // 23:00–01:00 is a real span across midnight, not a typo. Rolling it forward
+    // also keeps the server's "an entry cannot end before it starts" happy.
+    if (end.getTime() <= at.getTime()) end.setDate(end.getDate() + 1)
+  }
+  return finish(rest, assignee, at, end, matched)
 }
 
-function finish(rest: string, assignee: string | undefined, at: Date | null, matched: string[]): Captured {
+/** An omitted minutes group means the hour exactly, not NaN. */
+function part(value: string | undefined): number {
+  return value === undefined ? 0 : Number(value)
+}
+
+function finish(rest: string, assignee: string | undefined, at: Date | null, end: Date | null,
+  matched: string[]): Captured {
   return {
     text: rest.replace(/\s+/g, ' ').trim(),
     ...(assignee ? { assignee } : {}),
     ...(at ? { dueAt: at.toISOString() } : {}),
+    ...(end ? { endAt: end.toISOString() } : {}),
     matched,
   }
 }
@@ -178,14 +225,4 @@ export function relativeTime(iso: string, now: Date = new Date()): string {
     minutes < 60 ? `${minutes} 分鐘` : hours < 24 ? `${hours} 小時` : days < 30 ? `${days} 天` : null
   if (amount === null) return then.toLocaleDateString()
   return overdue ? `逾期 ${amount}` : `${amount}後`
-}
-
-/** Urgency band, for colour. Only an unfinished thing can be late. */
-export function urgencyOf(iso: string | undefined, done: boolean, now: Date = new Date()):
-  'none' | 'later' | 'soon' | 'overdue' {
-  if (!iso || done) return 'none'
-  const ms = new Date(iso).getTime() - now.getTime()
-  if (Number.isNaN(ms)) return 'none'
-  if (ms < 0) return 'overdue'
-  return ms < 24 * 3_600_000 ? 'soon' : 'later'
 }

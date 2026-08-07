@@ -135,6 +135,45 @@ ok(calendarNotice.payload?.kind === 'calendar',
   'and so is a calendar change, named separately so only that list refetches')
 watcher.close()
 
+// --- Triage ---------------------------------------------------------------
+//
+// The dashboard's three bands. What matters here is the *storage* rule: NOW and
+// LATER are opinions and are stored; DONE is a fact and becomes a completion,
+// so it must never appear in the triage column as well — two copies of "done"
+// is two things to disagree.
+
+const triaged = await json(await api('PATCH', `/api/todos/${ROOM}/${first.id}`, { triage: 'LATER' }))
+ok(triaged.triage === 'LATER', `a decision is stored (${triaged.triage})`)
+
+const backToAuto = await json(await api('PATCH', `/api/todos/${ROOM}/${first.id}`, { triage: 'auto' }))
+ok(backToAuto.triage === undefined,
+  'handing an item back to the clock clears the decision rather than storing a word for it')
+
+const asDone = await json(await api('PATCH', `/api/todos/${ROOM}/${first.id}`, { triage: 'DONE' }))
+ok(asDone.done === true && !!asDone.completedBy && asDone.triage === undefined,
+  `DONE becomes a completion with an author, not a stored triage (${JSON.stringify(asDone.triage)})`)
+
+const revived = await json(await api('PATCH', `/api/todos/${ROOM}/${first.id}`, { triage: 'NOW' }))
+ok(revived.done === false && revived.triage === 'NOW',
+  'moving a finished item back onto the board reopens it')
+
+const badTriage = await api('PATCH', `/api/todos/${ROOM}/${first.id}`, { triage: 'urgent' })
+ok(badTriage.status === 400, `an unknown triage is refused (HTTP ${badTriage.status})`)
+
+// A refused triage must not have applied the rest of the same PATCH.
+const untouched = await readTodo(first.id)
+ok(untouched.triage === 'NOW', 'and leaves the item as it was')
+
+// Calendar entries carry the same two columns: on the board they are the same
+// kind of thing, and an entry nobody can mark as dealt with sits there forever.
+const eventDone = await json(await api('PATCH', `/api/calendar/${ROOM}/${meeting.id}`, { triage: 'DONE' }))
+ok(eventDone.done === true && !!eventDone.completedBy,
+  `a calendar entry can be marked dealt with (${eventDone.completedBy})`)
+const eventTriaged = await json(
+  await api('PATCH', `/api/calendar/${ROOM}/${meeting.id}`, { triage: 'LATER' }))
+ok(eventTriaged.triage === 'LATER' && eventTriaged.done === false,
+  'and moved back onto the board')
+
 // --- Deletion -------------------------------------------------------------
 
 const removed = await api('DELETE', `/api/todos/${ROOM}/${first.id}`)
