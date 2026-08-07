@@ -6,5 +6,7 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // Unmounts what each test rendered — see the file for why it is not automatic.
+    setupFiles: ['./vitest.setup.ts'],
   },
 })

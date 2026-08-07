@@ -53,6 +53,12 @@ public class S3Presigner {
      */
     public String presignGet(String scheme, String host, String bucket, String key,
             Duration expiry, Instant now) {
+        return presign("GET", scheme, host, bucket, key, expiry, now);
+    }
+
+    /** As {@link #presignGet}, for any HTTP method — deletion uses the same signing. */
+    public String presign(String method, String scheme, String host, String bucket, String key,
+            Duration expiry, Instant now) {
         String amzDate = AMZ_DATE.format(now);
         String dateStamp = DATE_STAMP.format(now);
         String scope = dateStamp + "/" + region + "/s3/aws4_request";
@@ -67,7 +73,7 @@ public class S3Presigner {
         String canonicalQuery = canonicalQuery(query);
 
         String canonicalRequest = String.join("\n",
-                "GET",
+                method,
                 canonicalUri,
                 canonicalQuery,
                 "host:" + host + "\n",

@@ -34,7 +34,11 @@
 
 **B. 錄影播放介面** ✅ 已完成:`recordings` 表(V6)由 webhook 與事件同交易寫入(egress id 冪等),`GET /api/recordings/{room}` 列出、`/{id}/url` 即時簽發 30 分鐘有效的 SigV4 預簽連結;前端側邊面板列出並就地播放。物件儲存憑證不出後端、位元組不經後端(nginx 轉發)。以 `S3PresignerTest`、`tests/e2e/run.sh recordings`(含竄改簽章需被拒)、`tests/ui/run.sh recordings` 驗證。
 
-**C. 需要真實環境才能推進(部署層,非程式碼缺口)**
+**C. 資料保留與刪除** ✅ 已完成:`RetentionService`(postgres profile,每小時)清理錄影+物件、聊天+其 `message_search` 投影、`audit_log`、**已發布**的 `outbox_events`。**每種期限預設 0 = 永久保留**——部署當下就開始刪資料是很糟的驚喜,由維運者逐項以 `warroomlive.retention.*-days` 開啟。刪除分批(500 列/批、每表每輪最多 20 批)且各自獨立交易(用 `TransactionTemplate`——同一 bean 自呼叫的 `@Transactional` 不會生效)。聊天與其搜尋投影共用同一期限是刻意的:只刪訊息卻留索引,等於讓搜尋回傳資料庫已經沒有的內容。未發布的 outbox 列永不碰——那是佇列不是歷史。錄影**先刪物件再刪列**,物件刪不掉就留著列等下一輪,而不是留下沒人指得到的檔案。另加**手動刪除**`DELETE /api/recordings/{room}/{id}`(共用同一條路徑,發 `meeting.recording.deleted` 帶 `actor`),前端錄影面板兩段式確認。V7 補上四個依時間的索引——既有索引都以 room/aggregate 開頭,年齡條件只能全表掃描。以 `tests/e2e/run.sh retention` 驗證(用 `docker compose run` 另起一個開了保留期限的 backend 打同一個資料庫,不動到跑著的 stack;**關鍵斷言是否定的那些**——新資料要活著、未發布的 outbox 列要活著)。
+
+**D. REST 濫用防護與分頁** ✅ 已完成:HTTP API 沿用同一個 token bucket(`limits/RestRateLimitFilter`,預設 20/s + 2 倍突發),**跑在認證之前**——洪水應該在讓伺服器驗簽章、抓 JWKS 之前就被擋掉,這也是為什麼以位址而非 subject 為 key。位址取 `X-Forwarded-For` 的**最後一段**:nginx 是附加在後面,前面的是客戶端自己塞的、可偽造;取第一段等於讓任何人每次請求都換一個新額度。超量回 **429 + Retry-After**(HTTP 呼叫端在等答案,可以被告知退讓;信令則是丟棄)。健康檢查、`/api/auth/config`、自我認證的 LiveKit webhook 豁免。HTTP 沒有斷線事件可以釋放 bucket,改為定期掃除閒置。清單端點改為分頁:`/api/recordings/{room}` 與 `/api/search/messages` 收 `limit`/`offset`(預設 50、上限 200,越界夾住而非報錯),搜尋另限查詢字串長度(ILIKE 分支會掃描)。以 `RateLimiterTest`、`RestRateLimitFilterTest`(含偽造 XFF 不能換額度)、`PagesTest`、`tests/e2e/run.sh limits` 驗證。
+
+**E. 需要真實環境才能推進(部署層,非程式碼缺口)**
 真實 IdP(Keycloak/Entra)對接演練、Slack/PagerDuty 告警接收端、TURN/TLS 443 真憑證、跨區域備份複寫與 KMS、目標環境的藍圖級工作負載(20k 連線)。
 
 **D. 等規模需求出現再做**

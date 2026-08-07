@@ -104,4 +104,35 @@ ok((await playback.text()) === 'fake-mp4-body', 'and returns the recording bytes
 const tampered = await fetch(ORIGIN + url.replace(/X-Amz-Signature=.*/, 'X-Amz-Signature=deadbeef'))
 ok(!tampered.ok, `a tampered signature is refused (HTTP ${tampered.status})`)
 
+// --- The list is a page, not the whole table.
+const paged = await (await fetch(`${ORIGIN}/api/recordings/${ROOM}?limit=0&offset=-1`)).json()
+ok(Array.isArray(paged) && paged.length === 1,
+  'nonsense paging is clamped rather than turned into a database error')
+const beyond = await (await fetch(`${ORIGIN}/api/recordings/${ROOM}?limit=10&offset=5`)).json()
+ok(beyond.length === 0, 'an offset past the end returns an empty page, not everything')
+
+// --- Deletion removes the row AND the object.
+const objectExists = () => {
+  const out = sh(`${COMPOSE} exec -T minio sh -c "mc ls local/${BUCKET}/${OBJECT_KEY} 2>&1 || true"`)
+  return out.includes(OBJECT_KEY)
+}
+ok(objectExists(), 'the object is still in the bucket before deletion')
+
+const removed = await fetch(`${ORIGIN}/api/recordings/${ROOM}/${listed[0].id}`, { method: 'DELETE' })
+ok(removed.ok, `the recording is deleted (HTTP ${removed.status})`)
+
+const afterDelete = await (await fetch(`${ORIGIN}/api/recordings/${ROOM}`)).json()
+ok(afterDelete.length === 0, 'it is gone from the room library')
+// The whole point of deletion is that the file stops existing — a row-only
+// delete would leave someone's meeting in the bucket forever.
+ok(!objectExists(), 'and its object is gone from the bucket')
+
+// --- A presigned URL minted before the deletion no longer serves anything.
+const afterGone = await fetch(ORIGIN + url)
+ok(!afterGone.ok, `a URL issued earlier now fails (HTTP ${afterGone.status})`)
+
+// --- Deleting it again is a 404, not a second success.
+const again = await fetch(`${ORIGIN}/api/recordings/${ROOM}/${listed[0].id}`, { method: 'DELETE' })
+ok(again.status === 404, `deleting a recording that is gone 404s (HTTP ${again.status})`)
+
 done('RECORDINGS')

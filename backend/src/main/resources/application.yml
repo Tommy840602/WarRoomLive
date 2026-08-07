@@ -31,6 +31,13 @@ warroomlive:
     # is a few kilobytes.
     max-messages-per-second: 60
     max-frame-bytes: 65536
+  api:
+    # Per-caller limit for the HTTP API, keyed by client address (the last entry
+    # of X-Forwarded-For, which is the one nginx added). Tolerates a burst of
+    # twice this, so a page load fetching several endpoints at once is never
+    # throttled; excess gets 429 with Retry-After. Health, the auth bootstrap and
+    # the self-authenticating LiveKit webhook are exempt.
+    max-requests-per-second: ${API_MAX_REQUESTS_PER_SECOND:20}
   chat:
     # How many recent messages to retain per room (in-memory) and replay on join.
     history-limit: 100
@@ -57,6 +64,20 @@ warroomlive:
     egress-s3-bucket: ${EGRESS_S3_BUCKET:}
     egress-s3-access-key: ${EGRESS_S3_ACCESS_KEY:}
     egress-s3-secret-key: ${EGRESS_S3_SECRET_KEY:}
+  # How long durable data is kept, in days (postgres profile). ZERO MEANS FOREVER
+  # — the deliberate default, so deploying this release deletes nothing until an
+  # operator chooses a period. Recordings remove their object from the store as
+  # well; chat covers its search projection too, so search can never return a
+  # message that no longer exists. Published outbox rows are the short-term
+  # audit trail behind the backbone; unpublished ones are the queue and are
+  # never touched.
+  retention:
+    recordings-days: ${RETENTION_RECORDINGS_DAYS:0}
+    chat-days: ${RETENTION_CHAT_DAYS:0}
+    audit-days: ${RETENTION_AUDIT_DAYS:0}
+    published-events-days: ${RETENTION_PUBLISHED_EVENTS_DAYS:0}
+    interval-ms: ${RETENTION_INTERVAL_MS:3600000}
+    initial-delay-ms: ${RETENTION_INITIAL_DELAY_MS:60000}
 
 # Metrics/health for scraping. nginx does not proxy /actuator, so these stay
 # internal to the compose network (the observability overlay's Prometheus).

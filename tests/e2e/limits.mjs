@@ -1,12 +1,14 @@
-// Abuse limits on the signaling plane. The CRDT plane has carried message-rate,
-// update-size and document-size limits from the start; these are the matching
-// ones for signaling. What matters is containment: a misbehaving connection
-// loses its own excess traffic without costing anyone else the room.
-import { RUN_ID, WS_ORIGIN, done, ok, signalClient, sleep } from './lib.mjs'
+// Abuse limits on the signaling plane and the HTTP API. The CRDT plane has
+// carried message-rate, update-size and document-size limits from the start;
+// these are the matching ones for the other two. What matters is containment: a
+// misbehaving caller loses its own excess traffic without costing anyone else
+// the room.
+import { ORIGIN, RUN_ID, WS_ORIGIN, done, ok, signalClient, sleep } from './lib.mjs'
 
 const ROOM = 'limits-' + RUN_ID
 const CHAT_LIMIT = Number(process.env.E2E_CHAT_MAX_LENGTH ?? 4000)
 const RATE = Number(process.env.E2E_MAX_MESSAGES_PER_SECOND ?? 60)
+const API_RATE = Number(process.env.E2E_API_MAX_REQUESTS_PER_SECOND ?? 20)
 
 const alice = signalClient('alice', 'Alice')
 await alice.join(ROOM)
@@ -76,6 +78,25 @@ const marker = 'still-working-' + RUN_ID
 alice.send({ type: 'chat', room: ROOM, from: 'alice', payload: marker })
 await bob.until('chat', (m) => m.payload === marker, 8000)
 ok(true, 'the room keeps working for everyone else during the flood')
+
+// --- The HTTP API carries the same shape of limit. It is the side with the
+//     expensive operations (signing tokens and playback URLs, running full-text
+//     queries), so a loop over any of them costs far more to serve than to send.
+const burst = API_RATE * 6
+const statuses = await Promise.all(Array.from({ length: burst }, () =>
+  fetch(`${ORIGIN}/api/media/config`).then((r) => r.status).catch(() => 0)))
+const throttled = statuses.filter((s) => s === 429).length
+ok(throttled > 0, `an API flood is throttled (${throttled} of ${burst} got 429)`)
+ok(statuses.filter((s) => s === 200).length >= API_RATE,
+  'and the burst allowance was served first, so ordinary use is untouched')
+
+// Health must stay answerable even while a caller is being throttled — it is
+// what tells an operator the service is alive.
+ok((await fetch(`${ORIGIN}/api/health`)).ok, 'health is exempt and still answers')
+
+// The bucket refills, so a throttled caller recovers on its own.
+await sleep(2000)
+ok((await fetch(`${ORIGIN}/api/media/config`)).ok, 'the caller recovers once the bucket refills')
 
 ;[alice, bob, flooder].forEach((c) => c.close())
 done('LIMITS')

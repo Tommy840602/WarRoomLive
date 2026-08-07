@@ -215,6 +215,23 @@ export default function App() {
     return ((await res.json()) as { url: string }).url
   }, [])
 
+  /**
+   * Deletes a recording and its file. The list is refetched rather than filtered
+   * locally, so what is shown afterwards is what the server actually holds.
+   */
+  const deleteRecording = useCallback(async (id: number) => {
+    const room = joinedAsRef.current?.room ?? ''
+    const headers: HeadersInit = tokenRef.current
+      ? { Authorization: `Bearer ${tokenRef.current}` }
+      : {}
+    const res = await fetch(`/api/recordings/${encodeURIComponent(room)}/${id}`, {
+      method: 'DELETE',
+      headers,
+    })
+    if (!res.ok) throw new Error(`刪除失敗(HTTP ${res.status})`)
+    await loadRecordings(room)
+  }, [loadRecordings])
+
   const join = useCallback(async () => {
     setStatus('connecting')
     setError(null)
@@ -616,7 +633,11 @@ export default function App() {
             />
           )}
           {status === 'in-room' && recordings.length > 0 && (
-            <RecordingsPanel recordings={recordings} onRequestUrl={recordingUrl} />
+            <RecordingsPanel
+              recordings={recordings}
+              onRequestUrl={recordingUrl}
+              onDelete={deleteRecording}
+            />
           )}
           <ChatPanel
             messages={messages.map((m) => ({

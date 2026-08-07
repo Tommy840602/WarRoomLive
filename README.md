@@ -29,7 +29,10 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
 - **靜音 / 關視訊**:本地切換 track 的 `enabled`,並透過 `state` 訊息把音視訊開關廣播給房間;其他成員的視訊標籤與成員名單會顯示對應圖示(🔇 / 📷)。新成員加入時,既有成員會重送一次自己的狀態,確保畫面同步。
 - **表情反應 / 舉手**:`reaction` 訊息廣播即時 emoji(👍 ❤️ 😂 🎉 👏),畫面上浮出淡出動畫;`hand` 訊息廣播舉手開關(✋),在視訊標籤與成員名單持續顯示。舉手狀態同樣會在新成員加入時重送。
 - **房間人數上限**:因 mesh 上行頻寬隨人數上升,後端對每間房設硬性上限(`warroomlive.signaling.max-room-size`,預設 8),額滿時以 `room-full` 拒絕加入;前端接近上限(6 人)顯示柔性警告橫幅(僅 mesh 模式)。需要更大房間時改用 SFU 疊加層(見下方)。
-- **濫用防護(兩個平面對稱)**:信令平面有每連線 token bucket(預設 60/s,允許 2 倍突發,所以「加入房間 + 一連串 ICE candidate」不會被誤擋)、容器層的訊框上限(64 KB)、以及聊天長度上限(4000 字,**在寫入資料庫之前**檢查);CRDT 平面本來就有訊息速率/單筆更新/文件大小三重上限。處置方式依意圖不同:超速**丟棄該訊息**(突發多半是程式錯誤或網路問題,斷線會連帶讓聊天、presence、協商一起死)、過長聊天**明確回錯**(絕不截斷——發送者必須知道沒送出去)、超大訊框由容器直接以 1009 關閉。每種拒絕都以 `warroomlive.signaling.messages.in` 的 type 標籤計數。
+- **濫用防護(三個平面對稱)**:信令平面有每連線 token bucket(預設 60/s,允許 2 倍突發,所以「加入房間 + 一連串 ICE candidate」不會被誤擋)、容器層的訊框上限(64 KB)、以及聊天長度上限(4000 字,**在寫入資料庫之前**檢查);CRDT 平面本來就有訊息速率/單筆更新/文件大小三重上限;HTTP API 用同一個 token bucket 以來源位址計(預設 20/s + 2 倍突發)。處置方式依意圖不同:信令超速**丟棄該訊息**(突發多半是程式錯誤或網路問題,斷線會連帶讓聊天、presence、協商一起死)、過長聊天**明確回錯**(絕不截斷——發送者必須知道沒送出去)、超大訊框由容器直接以 1009 關閉、HTTP 超量回 **429 + Retry-After**(呼叫端在等答案,可以被告知退讓)。每種拒絕都有指標(`warroomlive.signaling.messages.in`、`warroomlive.api.rejected`)。
+  HTTP 這道**跑在認證之前**——洪水應該在讓伺服器驗簽章、抓 IdP 的 JWKS 之前就被擋掉。來源位址取 `X-Forwarded-For` 的**最後一段**(nginx 附加在後面的那段);前面的是客戶端自己塞的、可以偽造,取第一段等於讓任何人每次請求都換一個新額度。健康檢查、`/api/auth/config`、自我認證的 LiveKit webhook 豁免。
+- **清單端點都是分頁**:`/api/recordings/{room}` 與 `/api/search/messages` 收 `limit`/`offset`(預設 50、上限 200,越界夾住而非報錯)。
+- **資料保留**:錄影(連同 MP4)、聊天(連同全文檢索投影)、稽核軌跡、已發布的 outbox 列都有可設定的保留期,每小時分批清理。**預設全部是 0 = 永久保留**——部署當下就開始刪資料是很糟的驚喜,由維運者用 `RETENTION_*_DAYS` 逐項開啟。未發布的 outbox 列永不刪(那是佇列不是歷史);聊天與其搜尋投影共用同一期限,否則搜尋會回傳資料庫已經沒有的內容。
 - **連線品質與弱網處理**:每 2 秒量測與每位成員之間的連線(RTT、封包遺失、抖動),在成員名單以訊號格顯示良好/普通/不佳。**持續**不佳時只降低送給該位成員的視訊碼率與解析度——一個人網路差不該拖累其他人;恢復判定刻意比降級慢,避免網路抖動造成畫質反覆跳動。連線被瀏覽器判定 `failed` 時(例如換網路)自動做 ICE 重啟,由 peer id 較小的一方發起以避免雙方相撞。SFU 模式直接採用 LiveKit 的連線品質評級,降級交給既有的 adaptiveStream/dynacast。
 - **斷線自動重連**:筆電休眠、Wi-Fi 切換或後端重啟都會切斷信令連線。前端以指數退避(上限 10 秒、帶抖動)自動重連,期間顯示提示橫幅並暫停聊天輸入;連線恢復後自動重新加入房間、重送音視訊與舉手狀態,並依伺服器回傳的最新成員清單重建畫面(mesh 模式重建 peer connection;SFU 模式的媒體走 LiveKit 自己的連線,不受影響)。**被主持人移出(4403)與主動離開不會重連**——否則等於繞過伺服器的決定。共享筆記與白板本來就會自癒,所以重連只需處理信令平面。
 - **房間權限(主持人 / 鎖定 / 踢人)**:開房者即主持人(👑,離開時自動交接給最資深成員);只有主持人能 **鎖定房間**(🔒 之後新成員以 `room-locked` 被拒,既有成員重連不受影響)與 **移出成員**(對方收到 `kicked` 通知後連線以 4403 關閉)。授權全部在伺服器端驗證——訊息的 `from` 必須等於該連線 join 時的身分,再比對 backplane 中的房間主持人;房間 meta(`room-state`:host + locked)在加入時下發、變更時廣播,多節點部署下由 Redis 原子維護。相應稽核事件:`participant.kicked`、`room.locked`、`room.unlocked`。
@@ -77,6 +80,7 @@ docker compose -f docker-compose.yml -f docker-compose.sfu.yml -f docker-compose
 - 房間內(SFU 模式)出現「錄影」按鈕:後端呼叫 **LiveKit Egress** 的 twirp API 啟動 room-composite 錄影(headless Chrome 合成畫面),MP4 直接上傳 **MinIO**(S3 API,bucket `recordings`);LiveKit secret 與儲存憑證都不出後端。離開房間時自動停止。
 - **錄影清單與播放**:錄完的影片會列在房間側邊(時間、長度、大小),點播放即在頁面內播。播放走**預簽 URL**——資料庫只存物件 key,每次點播放才即時簽發一條 30 分鐘有效的連結,物件儲存的憑證永遠不出後端,影音位元組也不經過後端(nginx 直接把請求轉給物件儲存)。webhook 寫入的錄影列與事件同交易提交,重送不會產生重複。
 - **完成通知走 webhook**:LiveKit 以「body 雜湊 JWT」簽名回呼 `/api/livekit/webhook`(後端驗簽),搭配 events 疊加層時轉成 `meeting.recording.completed` 事件進骨幹。
+- **刪除**:清單上每筆有刪除鍵(兩段式確認,不用會卡住整頁的 `confirm()`)。`DELETE /api/recordings/{room}/{id}` **先刪物件、再刪列**——物件刪不掉就把列留著等重試,反過來會留下沒人指得到的檔案。刪除會發 `meeting.recording.deleted` 事件,帶 `reason` 與 `actor`(有登入時是 JWT subject)。
 - **會議領域**(`postgres` profile 自動啟用):第一人加入開啟 `meetings` 列、最後一人離開關閉(含時長與人數峰值);`meeting.started` / `meeting.ended` 與列同交易寫入 outbox。`Backplane.tryRegister/unregister` 回傳叢集人數,多節點下「第一人/最後一人」判定也精準。房間額滿的拒絕會發 `participant.rejected` 事件(權限類稽核)。
 
 ## OIDC 認證(選用疊加層)
@@ -185,6 +189,9 @@ tests/ui/run.sh --all            # 再加上會重啟後端的 reconnect
 | 套件 | 需要 | 涵蓋 |
 |---|---|---|
 | `signaling` / `room-acl` / `crdt` / `capacity` | 任何 stack | 信令與成員事件、房間權限(主持人/鎖房/踢人)、CRDT 收斂、房間上限的原子性 |
+| `limits` | 任何 stack | 三個平面的濫用防護:聊天長度、訊框上限、信令與 HTTP 的 token bucket(429 + Retry-After、健康檢查豁免、退讓後恢復)|
+| `retention` | 任何 stack | 過期資料被刪、**新資料與未發布的 outbox 列必須活著**;有物件儲存時連 MP4 一起刪 |
+| `recordings` | recording 疊加層 | webhook → 列 → 清單分頁 → 預簽播放 → 刪除(列與物件一起消失)|
 | `oidc` / `token-lifecycle` | oidc 疊加層 | 兩個 WS 平面的認證強制;refresh 輪替與 token 過期後 4401 斷線 |
 | `events` | events 疊加層 | 活動 → outbox → Redpanda → indexer → 讀模型 → 搜尋 API,以及重放去重 |
 | `crdt-hardening` / `scale` | 破壞性 | 快照前崩潰的耐久性、超大更新拒絕與壓縮;跨 collab 副本收斂與節點死亡後的 ghost 清理 |

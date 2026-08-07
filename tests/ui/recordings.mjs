@@ -82,5 +82,20 @@ ok(!src.includes('warroomsecret'), 'the object store secret is not exposed to th
 const status = await page.evaluate(async (u) => (await fetch(u)).status, src)
 ok(status === 200, `the player's URL is fetchable from the page (HTTP ${status})`)
 
+// Deleting is irreversible, so the first press must only arm the control.
+const del = page.locator('.recordings__delete').first()
+await del.click()
+ok((await del.innerText()).includes('確認'), 'the first press asks for confirmation instead of deleting')
+ok(await items.count() === 1, 'and the recording is still there')
+
+await del.click()
+await page.waitForFunction(
+  () => document.querySelectorAll('.recordings__item').length === 0, null, { timeout: 10000 })
+ok(true, 'confirming removes it from the list')
+// The list is refetched, so an empty panel means the server really lost it.
+const remaining = await page.evaluate(
+  async (r) => (await (await fetch(`/api/recordings/${r}`)).json()).length, room)
+ok(remaining === 0, 'and the server agrees it is gone, not just the local view')
+
 await browser.close()
 done('UI-RECORDINGS')

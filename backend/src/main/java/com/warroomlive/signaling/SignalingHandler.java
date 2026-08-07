@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.warroomlive.chat.ChatRepository;
 import com.warroomlive.chat.StoredMessage;
 import com.warroomlive.events.OutboxRecorder;
+import com.warroomlive.limits.RateLimiter;
 import com.warroomlive.meetings.MeetingTracker;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
