@@ -121,7 +121,11 @@ public class RoomManager {
         return sessionIndex.size();
     }
 
-    /** Returns every session in a room except the excluded peer — used for broadcasts. */
+    /**
+     * Returns every session in a room except the excluded peer — used for
+     * broadcasts. A null exclusion means everyone, which is what a
+     * server-originated event wants: nobody sent it, so nobody is skipped.
+     */
     public List<WebSocketSession> othersIn(String room, String excludePeerId) {
         Map<String, Member> members = rooms.get(room);
         if (members == null) {

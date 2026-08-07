@@ -60,6 +60,8 @@ public record SignalMessage(
     public static final String TYPE_KICK = "kick";
     public static final String TYPE_KICKED = "kicked";
     public static final String TYPE_ROOM_STATE = "room-state";
+    /** Server-originated: a file was shared into the room, so listeners refresh their list. */
+    public static final String TYPE_ATTACHMENT = "attachment";
     public static final String TYPE_ROOM_FULL = "room-full";
     public static final String TYPE_ROOM_LOCKED = "room-locked";
     public static final String TYPE_ERROR = "error";

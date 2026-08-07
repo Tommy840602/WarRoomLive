@@ -26,9 +26,13 @@ import java.util.concurrent.atomic.AtomicReference;
 @Profile("!redis")
 public class LocalBackplane implements Backplane {
 
+    /** What the directory knows about a member beyond its id. */
+    private record MemberInfo(String name, String subject) {
+    }
+
     /** Mutated only inside {@code directory.compute} — insertion order is the host order. */
     private static final class RoomRecord {
-        final LinkedHashMap<String, String> members = new LinkedHashMap<>();
+        final LinkedHashMap<String, MemberInfo> members = new LinkedHashMap<>();
         boolean locked;
 
         String host() {
@@ -48,7 +52,7 @@ public class LocalBackplane implements Backplane {
     public List<PeerInfo> peersIn(String room) {
         List<PeerInfo> peers = new ArrayList<>();
         directory.computeIfPresent(room, (r, record) -> {
-            record.members.forEach((id, name) -> peers.add(new PeerInfo(id, name)));
+            record.members.forEach((id, member) -> peers.add(new PeerInfo(id, member.name())));
             return record;
         });
         return List.copyOf(peers);
@@ -73,7 +77,7 @@ public class LocalBackplane implements Backplane {
     }
 
     @Override
-    public int tryRegister(String room, String peerId, String name, int maxRoomSize) {
+    public int tryRegister(String room, String peerId, String name, String subject, int maxRoomSize) {
         AtomicInteger sizeAfter = new AtomicInteger(REGISTER_REJECTED);
         directory.compute(room, (r, record) -> {
             RoomRecord next = record != null ? record : new RoomRecord();
@@ -86,7 +90,7 @@ public class LocalBackplane implements Backplane {
                     return record;
                 }
             }
-            next.members.put(peerId, name);
+            next.members.put(peerId, new MemberInfo(name, subject));
             sizeAfter.set(next.members.size());
             return next;
         });
@@ -102,6 +106,19 @@ public class LocalBackplane implements Backplane {
             return record.members.isEmpty() ? null : record;
         });
         return remaining.get();
+    }
+
+    @Override
+    public Optional<String> subjectOf(String room, String peerId) {
+        AtomicReference<String> subject = new AtomicReference<>();
+        directory.computeIfPresent(room, (r, record) -> {
+            MemberInfo member = record.members.get(peerId);
+            if (member != null) {
+                subject.set(member.subject());
+            }
+            return record;
+        });
+        return Optional.ofNullable(subject.get());
     }
 
     @Override

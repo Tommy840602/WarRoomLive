@@ -2,6 +2,7 @@ package com.warroomlive.signaling;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.warroomlive.chat.ChatRepository;
+import com.warroomlive.config.WebSocketConfig;
 import com.warroomlive.chat.StoredMessage;
 import com.warroomlive.events.OutboxRecorder;
 import com.warroomlive.limits.RateLimiter;
@@ -125,7 +126,7 @@ public class SignalingHandler extends TextWebSocketHandler {
         // Per-message credential check (oidc mode): a connection whose handshake
         // token has expired is closed — the client must reconnect with a renewed
         // token. 4401 mirrors HTTP 401 in the private close-code range.
-        Object expiry = session.getAttributes().get(com.warroomlive.config.WebSocketConfig.TOKEN_EXPIRY_ATTRIBUTE);
+        Object expiry = session.getAttributes().get(WebSocketConfig.TOKEN_EXPIRY_ATTRIBUTE);
         if (expiry instanceof Long expiresAtMillis && System.currentTimeMillis() > expiresAtMillis) {
             log.info("Closing session {}: handshake token expired", session.getId());
             countIn("token-expired");
@@ -195,8 +196,9 @@ public class SignalingHandler extends TextWebSocketHandler {
         // backplane make the capacity decision atomically — reconnects of an
         // existing member always pass.
         List<PeerInfo> clusterPeers = backplane.peersIn(msg.room());
-        String name = displayName(msg);
-        int memberCount = backplane.tryRegister(msg.room(), msg.from(), name, maxRoomSize);
+        String name = displayName(msg, session);
+        String subject = subjectOf(session);
+        int memberCount = backplane.tryRegister(msg.room(), msg.from(), name, subject, maxRoomSize);
         if (memberCount == Backplane.REGISTER_REJECTED) {
             log.info("Rejected {} from full room {} (cap {})", msg.from(), msg.room(), maxRoomSize);
             send(session, new SignalMessage(
@@ -250,6 +252,20 @@ public class SignalingHandler extends TextWebSocketHandler {
         backplane.publishToRoom(msg.room(), msg.from(), joined);
         outbox.ifAvailable(recorder -> recorder.record(
                 "participant.joined", "room", msg.room(), Map.of("peerId", msg.from(), "name", name)));
+    }
+
+    /**
+     * Pushes a server-originated event to everyone in a room, on this node and
+     * across the cluster.
+     *
+     * <p>The entry point for things that happen outside the socket but belong to
+     * the room — a file uploaded over HTTP, say. Keeps the same discipline as the
+     * message handlers: deliver locally, then publish once for the other nodes,
+     * never both to the same session.
+     */
+    public void broadcastToRoom(String room, SignalMessage message) {
+        rooms.othersIn(room, null).forEach(session -> send(session, message));
+        backplane.publishToRoom(room, null, message);
     }
 
     private void relayToPeer(WebSocketSession session, SignalMessage msg) {
@@ -454,8 +470,23 @@ public class SignalingHandler extends TextWebSocketHandler {
         }
     }
 
-    /** Extracts a trimmed display name from a join payload, falling back to the peer id. */
-    private static String displayName(SignalMessage msg) {
+    /**
+     * The name to show for a joining peer.
+     *
+     * <p>When the identity provider vouched for one at the handshake, that name
+     * wins and the client's is ignored. A display name is what everyone else in
+     * the room reads to decide who they are talking to; letting an authenticated
+     * user pick an arbitrary one would make logging in prove nothing about
+     * identity, only about access.
+     *
+     * <p>Without an identity provider the client's choice is all there is, so it
+     * is taken as before — falling back to the peer id.
+     */
+    private static String displayName(SignalMessage msg, WebSocketSession session) {
+        Object verified = session.getAttributes().get(WebSocketConfig.VERIFIED_NAME_ATTRIBUTE);
+        if (verified instanceof String name && !name.isBlank()) {
+            return name;
+        }
         if (msg.payload() != null && msg.payload().isTextual()) {
             String name = msg.payload().asText().trim();
             if (!name.isEmpty()) {
@@ -463,6 +494,12 @@ public class SignalingHandler extends TextWebSocketHandler {
             }
         }
         return msg.from();
+    }
+
+    /** The authenticated identity behind this connection, or null without OIDC. */
+    private static String subjectOf(WebSocketSession session) {
+        return session.getAttributes().get(WebSocketConfig.SUBJECT_ATTRIBUTE) instanceof String subject
+                ? subject : null;
     }
 
     private static boolean isBlank(String s) {

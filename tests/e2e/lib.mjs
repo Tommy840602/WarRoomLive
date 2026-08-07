@@ -131,10 +131,14 @@ export function signalClient(id, name = id, { token } = {}) {
     }
   }
 
-  /** join + await the `peers` reply, the handshake every suite starts from. */
-  const join = async (room) => {
+  /**
+   * join + await the `peers` reply, the handshake every suite starts from.
+   * `claimedName` overrides what the client asks to be called — the server may
+   * well overrule it, which is the point of asking.
+   */
+  const join = async (room, claimedName = name) => {
     await opened
-    send({ type: 'join', room, from: id, payload: name })
+    send({ type: 'join', room, from: id, payload: claimedName })
     return next('peers')
   }
 

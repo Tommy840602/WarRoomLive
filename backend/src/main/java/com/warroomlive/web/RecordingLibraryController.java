@@ -3,6 +3,7 @@ package com.warroomlive.web;
 import com.warroomlive.recordings.RecordingEntity;
 import com.warroomlive.recordings.RecordingStore;
 import com.warroomlive.recordings.S3Presigner;
+import com.warroomlive.signaling.Backplane;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -21,6 +22,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Lists a room's finished recordings and hands out short-lived playback URLs.
@@ -45,6 +47,7 @@ public class RecordingLibraryController {
     private static final int MAX_LIMIT = 200;
 
     private final ObjectProvider<RecordingStore> recordings;
+    private final Backplane backplane;
     private final String bucket;
     private final String accessKey;
     private final String secretKey;
@@ -54,12 +57,14 @@ public class RecordingLibraryController {
 
     public RecordingLibraryController(
             ObjectProvider<RecordingStore> recordings,
+            Backplane backplane,
             @Value("${warroomlive.media.egress-s3-endpoint:}") String endpoint,
             @Value("${warroomlive.media.egress-s3-bucket:}") String bucket,
             @Value("${warroomlive.media.egress-s3-access-key:}") String accessKey,
             @Value("${warroomlive.media.egress-s3-secret-key:}") String secretKey,
             @Value("${warroomlive.media.recording-path-prefix:/recordings}") String publicPrefix) {
         this.recordings = recordings;
+        this.backplane = backplane;
         this.bucket = bucket;
         this.accessKey = accessKey;
         this.secretKey = secretKey;
@@ -116,15 +121,20 @@ public class RecordingLibraryController {
      * one", which is the request a person actually makes. It is irreversible by
      * design — the point is that the file stops existing.
      *
-     * <p>The endpoint carries the same protection as the rest of this API: nothing
-     * in the default profile, an authenticated caller under {@code oidc}. It is
-     * deliberately not gated on the room's host, because there is no binding
-     * between a REST identity and a signaling peer id to check against, and a
-     * check on a value the caller supplies would only look like authorization.
-     * What is real is attribution: the caller's subject goes on the event.
+     * <p><strong>Host-gated when the room can say who its host is.</strong> Since
+     * the signaling handshake binds each peer to its authenticated subject, the
+     * room's host is now a person rather than just a peer id, and this endpoint
+     * can require that person. When the room is empty (nobody to host it) or the
+     * deployment has no identity provider (nobody to be), there is no such
+     * subject and the endpoint falls back to the API's ordinary protection —
+     * with attribution on the event either way. Gating on something the caller
+     * supplies would only look like authorization.
      */
     @DeleteMapping("/{room}/{id}")
     public Map<String, Object> delete(@PathVariable String room, @PathVariable long id) {
+        // Authorization first, deliberately: a 404 from the lookup would tell a
+        // caller who may not delete whether the recording exists at all.
+        requireHostIfKnown(room);
         RecordingEntity recording = store().byId(id)
                 .filter(r -> r.getRoom().equals(room))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "no such recording"));
@@ -135,10 +145,40 @@ public class RecordingLibraryController {
         return Map.of("id", id, "deleted", true);
     }
 
-    /** The authenticated subject, or {@code anonymous} when the app runs without auth. */
+    /**
+     * Refuses the caller when the room has a host with a known identity and the
+     * caller is not that person.
+     *
+     * <p>Deliberately silent when the host's subject is unknown: that means
+     * either an empty room or a deployment with no identity provider, and in
+     * neither case is there anything to compare against. Inventing a refusal
+     * there would break the zero-dependency default without protecting anyone.
+     */
+    private void requireHostIfKnown(String room) {
+        Backplane.RoomState state = backplane.roomState(room);
+        if (state.hostId() == null) {
+            return;
+        }
+        Optional<String> hostSubject = backplane.subjectOf(room, state.hostId());
+        if (hostSubject.isEmpty()) {
+            return;
+        }
+        if (!hostSubject.get().equals(caller())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "only the room's host may delete its recordings");
+        }
+    }
+
+    /**
+     * The authenticated subject, or {@code anonymous} when the app runs without
+     * auth. Spring's own anonymous principal is called {@code anonymousUser},
+     * which would end up in audit events and on screen; one name for "nobody" is
+     * enough.
+     */
     private static String caller() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return auth == null || auth.getName() == null ? "anonymous" : auth.getName();
+        String name = auth == null ? null : auth.getName();
+        return name == null || name.equals("anonymousUser") ? "anonymous" : name;
     }
 
     private RecordingStore store() {
