@@ -3,6 +3,7 @@ package com.warroomlive.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.warroomlive.agenda.CalendarEventEntity;
 import com.warroomlive.agenda.CalendarStore;
+import com.warroomlive.agenda.Triage;
 import com.warroomlive.signaling.SignalMessage;
 import com.warroomlive.signaling.SignalingHandler;
 import org.springframework.beans.factory.ObjectProvider;
@@ -60,7 +61,14 @@ public class CalendarController {
     public record CreateRequest(String title, String description, String startsAt, String endsAt) {
     }
 
-    public record UpdateRequest(String title, String description, String startsAt, String endsAt) {
+    /**
+     * Every field optional: a PATCH says what changed, not what everything is.
+     *
+     * <p>{@code triage} carries {@code "NOW"}, {@code "LATER"}, {@code "DONE"} or
+     * {@code "auto"} — see {@link #applyTriage}.
+     */
+    public record UpdateRequest(String title, String description, String startsAt, String endsAt,
+            Boolean done, String triage) {
     }
 
     @GetMapping("/{room}")
@@ -99,6 +107,10 @@ public class CalendarController {
         CalendarEventEntity current = store().byId(room, id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "no such event"));
 
+        // Parsed before anything is written, so a bad triage does not leave the
+        // edit half-applied.
+        Triage triage = TodoController.parseTriage(request.triage());
+
         String title = request.title() == null
                 ? current.getTitle() : require(request.title(), MAX_TITLE, "title");
         String description = request.description() == null
@@ -113,12 +125,46 @@ public class CalendarController {
                 ? current.getEndsAt() : TodoController.parseInstant(request.endsAt(), "endsAt");
         requireOrder(startsAt, endsAt);
 
-        CalendarEventEntity updated = store()
-                .edit(room, id, title, description, startsAt, endsAt, authorization.caller())
-                .orElse(current);
+        CalendarEventEntity updated = current;
+        if (request.title() != null || request.description() != null
+                || request.startsAt() != null || request.endsAt() != null) {
+            updated = store()
+                    .edit(room, id, title, description, startsAt, endsAt, authorization.caller())
+                    .orElse(current);
+        }
+        updated = applyTriage(room, id, request.done(), request.triage(), triage, updated);
         announce(room);
         return describe(updated);
     }
+
+    /**
+     * Applies completion and triage, which are the same request seen twice.
+     *
+     * <p>{@code triage: "DONE"} is turned into a completion rather than stored:
+     * "done" is a fact about the work, with a time and an author, and writing
+     * the word into the triage column as well would give the dashboard two
+     * copies to disagree over. Anything else is filed as an opinion, and
+     * {@code "auto"} hands the entry back to the clock.
+     *
+     * <p>Marking an item NOW or LATER also reopens it, because that is plainly
+     * what someone means by moving a finished thing back onto the board.
+     */
+    private CalendarEventEntity applyTriage(String room, long id, Boolean done, String rawTriage,
+            Triage triage, CalendarEventEntity fallback) {
+        CalendarEventEntity out = fallback;
+        boolean wantsDone = "DONE".equalsIgnoreCase(rawTriage);
+        if (done != null || wantsDone) {
+            boolean target = wantsDone || Boolean.TRUE.equals(done);
+            out = store().setDone(room, id, target, authorization.caller()).orElse(out);
+        } else if (rawTriage != null && out.isDone()) {
+            out = store().setDone(room, id, false, authorization.caller()).orElse(out);
+        }
+        if (rawTriage != null && !wantsDone) {
+            out = store().setTriage(room, id, triage).orElse(out);
+        }
+        return out;
+    }
+
 
     @DeleteMapping("/{room}/{id}")
     public Map<String, Object> delete(@PathVariable String room, @PathVariable long id) {
@@ -179,8 +225,19 @@ public class CalendarController {
         out.put("startsAt", event.getStartsAt().toString());
         out.put("createdBy", event.getCreatedBy());
         out.put("createdAt", event.getCreatedAt().toString());
+        out.put("done", event.isDone());
         if (event.getEndsAt() != null) {
             out.put("endsAt", event.getEndsAt().toString());
+        }
+        // Absent rather than null when nobody has overruled the clock: the
+        // dashboard's rule is "no stored triage means work it out from the
+        // time", and an explicit null in the payload invites the opposite.
+        if (event.getTriage() != null) {
+            out.put("triage", event.getTriage().name());
+        }
+        if (event.getCompletedAt() != null) {
+            out.put("completedAt", event.getCompletedAt().toString());
+            out.put("completedBy", event.getCompletedBy());
         }
         return out;
     }

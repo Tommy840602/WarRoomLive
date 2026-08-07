@@ -75,6 +75,12 @@ export interface Todo {
   createdAt: string
   completedAt?: string
   completedBy?: string
+  /**
+   * The room's stored triage decision, absent while the clock is still
+   * deciding. Absent and `NOW` are different states, so this is optional rather
+   * than defaulted — see `agenda/item.ts`.
+   */
+  triage?: 'NOW' | 'LATER'
 }
 
 /** One entry on the room's shared calendar. Times are ISO-8601 instants. */
@@ -87,6 +93,11 @@ export interface CalendarEvent {
   endsAt?: string
   createdBy: string
   createdAt: string
+  /** Entries can be marked dealt with, exactly as to-do items can. */
+  done?: boolean
+  completedAt?: string
+  completedBy?: string
+  triage?: 'NOW' | 'LATER'
 }
 
 /** A persisted chat message, carried in the `history` message on join. */

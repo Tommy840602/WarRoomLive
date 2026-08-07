@@ -1,41 +1,48 @@
-// The shared to-do list and calendar as two participants use them together.
+// The room's agenda board, as two participants use it together.
 // Needs a database, which the base stack has.
 //
 // What only a browser answers: does a change one person makes reach the other
-// *without a reload* (it travels over signaling, not polling), does the list
-// they both see agree — including the ordering, which the server owns — and
-// does the one-line capture actually put the right fields on the wire.
-//
-// Every locator is scoped to its panel. Both panels are in the DOM at once and
-// the CSS only hides the inactive one, so an unscoped `.row` would count rows
-// from the calendar while claiming to count to-dos.
+// *without a reload* (it travels over signaling, not polling), does the board
+// they both see agree, does the one-line capture put the right fields on the
+// wire — and, the thing this redesign is actually about, does a triage decision
+// made by one person hold for the room rather than living in one browser.
 import { RUN_ID, done, joinRoom, launch, ok, sleep } from './lib.mjs'
 
 const room = 'ui-agenda-' + RUN_ID
+const agenda = (page) => page.locator('[data-panel="agenda"]')
 
-const panel = (page, name) => page.locator(`[data-panel="${name}"]`)
-
-/** Opens a sidebar panel. One panel is shown at a time, at every width. */
-const open = async (page, name, label) => {
-  await page.locator('.sidebar__tab', { hasText: label }).click()
-  await panel(page, name).locator('.capture__line').waitFor({ state: 'visible' })
+const open = async (page) => {
+  await page.locator('.sidebar__tab', { hasText: '議程' }).click()
+  await agenda(page).locator('.capture__line').waitFor({ state: 'visible' })
 }
 
-/** The whole item, as one line — the point of the redesign. */
-const capture = async (page, name, line) => {
-  await panel(page, name).locator('.capture__line').fill(line)
-  await panel(page, name).locator('.capture__go').click()
+/** The whole item, as one line — the point of the capture. */
+const capture = async (page, line) => {
+  await agenda(page).locator('.capture__line').fill(line)
+  await agenda(page).locator('.capture__go').click()
 }
 
-const rowCount = (page, name) =>
-  page.evaluate((n) => document.querySelectorAll(`[data-panel="${n}"] .row`).length, name)
+/** Which band a piece of text ended up in. */
+const bandOf = (page, text) =>
+  page.evaluate((t) => {
+    const band = [...document.querySelectorAll('[data-panel="agenda"] .band')]
+      .find((b) => b.textContent?.includes(t))
+    return band?.querySelector('.band__label')?.textContent?.replace(/\d+$/, '') ?? null
+  }, text)
 
-const waitRows = (page, name, count) =>
+const waitBand = (page, text, label) =>
   page.waitForFunction(
-    ([n, c]) => document.querySelectorAll(`[data-panel="${n}"] .row`).length === c,
-    [name, count],
+    ([t, l]) => {
+      const band = [...document.querySelectorAll('[data-panel="agenda"] .band')]
+        .find((b) => b.textContent?.includes(t))
+      return band?.querySelector('.band__label')?.textContent?.replace(/\d+$/, '') === l
+    },
+    [text, label],
     { timeout: 15000 },
   )
+
+const rowCount = (page) =>
+  page.evaluate(() => document.querySelectorAll('[data-panel="agenda"] .row').length)
 
 const browser = await launch()
 const alice = await joinRoom(browser, { room, name: 'Alice' })
@@ -43,77 +50,111 @@ const bob = await joinRoom(browser, { room, name: 'Bob' })
 await sleep(2000)
 
 const tabs = await alice.locator('.sidebar__tab').allInnerTexts()
-ok(tabs.includes('待辦'), 'the room offers a shared to-do list')
-ok(tabs.includes('行事曆'), 'and a shared calendar')
+ok(tabs.includes('議程'), `the room offers one agenda, not a list and a calendar (${tabs.join('/')})`)
+ok(!tabs.includes('待辦') && !tabs.includes('行事曆'),
+  'and does not still offer the two panels it replaced')
 
-await open(alice, 'todos', '待辦')
-await open(bob, 'todos', '待辦')
+await open(alice)
+await open(bob)
 
-// --- Alice adds two items from one line each, the later-due one first.
-//     `3天後` / `2小時後` are the point: nobody fills in a datetime picker
-//     while someone is still talking.
-await capture(alice, 'todos', '訂會議室 @Bob 3天後')
-await waitRows(alice, 'todos', 1)
-await capture(alice, 'todos', '寄簡報 2小時後')
-await waitRows(alice, 'todos', 2)
-
-const aliceOrder = await panel(alice, 'todos').locator('.row__text').allInnerTexts()
-ok(aliceOrder.join(',') === '寄簡報,訂會議室',
-  `the soonest-due item is listed first (${aliceOrder.join(',')})`)
-
-// The assignee and the due date came out of the same line, not extra fields.
-ok((await panel(alice, 'todos').locator('.chip--who').allInnerTexts()).includes('@Bob'),
-  'the assignee was lifted out of the line')
-const rail = await panel(alice, 'todos').locator('.row__when').allInnerTexts()
-ok(rail.some((t) => t.includes('小時後')) && rail.some((t) => t.includes('天後')),
-  `each row leads with how far off it is (${rail.join('/')})`)
-
-// --- Bob sees them appear without reloading: the change came over signaling.
-await waitRows(bob, 'todos', 2)
-const bobOrder = await panel(bob, 'todos').locator('.row__text').allInnerTexts()
-ok(bobOrder.join(',') === aliceOrder.join(','),
-  'the other participant sees the same list, in the same order, without reloading')
-
-// --- Bob ticks one off; Alice sees it, and it sinks below what is still open.
-await panel(bob, 'todos').locator('.row__check').first().click()
+// --- A task and an appointment, from one input, landing on one board.
+await capture(alice, '訂會議室 @Bob 3天後')
 await alice.waitForFunction(
-  () => document.querySelectorAll('[data-panel="todos"] .row--done').length === 1,
-  null, { timeout: 15000 })
-ok(true, 'completing an item reaches the other participant')
+  () => document.querySelectorAll('[data-panel="agenda"] .row').length === 1, null,
+  { timeout: 15000 })
+await capture(alice, '與法務對齊 明天14:00-15:00')
+await alice.waitForFunction(
+  () => document.querySelectorAll('[data-panel="agenda"] .row').length === 2, null,
+  { timeout: 15000 })
 
-const afterDone = await panel(alice, 'todos').locator('.row__text').allInnerTexts()
-ok(afterDone[afterDone.length - 1] === '寄簡報',
-  `a completed item sinks below what is still open (${afterDone.join(',')})`)
+ok((await agenda(alice).locator('.chip--who').allInnerTexts()).includes('@Bob'),
+  'the assignee was lifted out of the line')
+// The span is what stamps an item as an appointment; without it, a task.
+const stamps = await agenda(alice).locator('.chip--stamp').allInnerTexts()
+ok(stamps.length === 1 && stamps[0] === '約會',
+  `only the line that named a span became an appointment (${stamps.join('/')})`)
 
-// --- The calendar, same round trip and the same capture line.
-await open(alice, 'calendar', '行事曆')
-await open(bob, 'calendar', '行事曆')
-await capture(alice, 'calendar', '週會 3小時後')
+// --- The clock does the filing until somebody disagrees.
+ok((await bandOf(alice, '與法務對齊')) === '現在',
+  'something happening tomorrow is filed under 現在 by the clock')
+ok((await bandOf(alice, '訂會議室')) === '稍後',
+  'and something three days out under 稍後')
 
-await waitRows(bob, 'calendar', 1)
-const title = await panel(bob, 'calendar').locator('.row__text').first().innerText()
-ok(title === '週會', `a calendar entry reaches the other participant live (${title})`)
-// Grouped under a day heading, because "which day" is the first question.
-ok(await panel(bob, 'calendar').locator('.day__label').count() >= 1,
-  'and is grouped under the day it falls on')
+// --- Bob sees the same board without reloading.
+await bob.waitForFunction(
+  () => document.querySelectorAll('[data-panel="agenda"] .row').length === 2, null,
+  { timeout: 15000 })
+ok((await bandOf(bob, '與法務對齊')) === '現在',
+  'the other participant sees the same board, without reloading')
 
-// A line with no time cannot be placed on a calendar; it says so rather than
-// leaving a dead button with no explanation.
-await panel(alice, 'calendar').locator('.capture__line').fill('沒有時間的事')
-ok(await panel(alice, 'calendar').locator('.capture__read--needs').isVisible(),
-  'an entry with no time asks for one instead of failing silently')
-await panel(alice, 'calendar').locator('.capture__line').fill('')
+// --- Triage is the room's decision, not one browser's. This is the whole
+//     reason it is a database column and not component state.
+await agenda(alice).locator('.triage').first().click()
+await waitBand(bob, '與法務對齊', '稍後')
+ok(true, "one person's triage decision reaches everyone else")
+
+// And it is visibly a decision now, not the clock still guessing.
+const autoRings = await agenda(bob).locator('.triage--auto').count()
+ok(autoRings === 1,
+  `a decided item stops being marked as automatic (${autoRings} of 2 still automatic)`)
+
+// --- Cycling round to 完成 records who did it.
+await agenda(alice).locator('.band--now, .band').locator('.triage').first().click()
+await waitBand(alice, '與法務對齊', '完成')
+ok((await agenda(alice).locator('.chip--done').count()) >= 1,
+  'finishing an item records who finished it')
+await waitBand(bob, '與法務對齊', '完成')
+ok(true, 'and that reaches the other participant too')
+
+// --- The calendar is a time grid over the same items, not another list.
+await agenda(alice).getByRole('button', { name: '行事曆' }).click()
+await sleep(500)
+ok(await agenda(alice).locator('.grid__column').count() >= 1,
+  'the calendar view is a grid of day columns')
+ok((await agenda(alice).locator('.slot').allInnerTexts()).some((t) => t.includes('與法務對齊')),
+  'and the appointment captured on the board is a block on it')
+
+// A block's height is its duration — the thing a list cannot show, and the
+// reason a room can see whether an afternoon is free.
+const spans = await alice.evaluate(() =>
+  [...document.querySelectorAll('[data-panel="agenda"] .slot')]
+    .map((el) => ({ text: el.textContent ?? '', height: el.getBoundingClientRect().height })))
+const hourLong = spans.find((s) => s.text.includes('與法務對齊'))
+ok(hourLong && hourLong.height > 30,
+  `an hour-long appointment is drawn an hour tall (${Math.round(hourLong?.height ?? 0)}px)`)
+
+// The now-line is the one moving thing on the grid; without it the reader has
+// to work out where "now" is from the hour labels.
+ok(await agenda(alice).locator('.grid__now').count() === 1,
+  'today carries a now-line, and only today')
+
+// Paging away from today and back.
+await agenda(alice).getByRole('button', { name: '下一段' }).click()
+await sleep(300)
+ok(await agenda(alice).locator('.grid__now').count() === 0, 'paging forward leaves today behind')
+await agenda(alice).getByRole('button', { name: '今天' }).click()
+await sleep(300)
+ok(await agenda(alice).locator('.grid__now').count() === 1, 'and 今天 brings it back')
+
+// An undated item cannot be placed on a grid, so it is counted rather than dropped.
+await capture(alice, '沒有時間的事')
+await sleep(600)
+ok((await agenda(alice).innerText()).includes('沒有時間的項目'),
+  'undated items are counted, not silently missing from the grid')
+
+await agenda(alice).getByRole('button', { name: '清單' }).click()
+await sleep(400)
 
 // --- Deleting takes two presses, like everything else destructive here.
-await open(alice, 'todos', '待辦')
-await open(bob, 'todos', '待辦')
-const del = panel(alice, 'todos').locator('.row__drop').first()
+const del = agenda(alice).locator('.row__drop').first()
 await del.click()
 ok((await del.innerText()).includes('確認'), 'the first press asks for confirmation')
-ok((await rowCount(alice, 'todos')) === 2, 'and nothing is deleted yet')
+ok((await rowCount(alice)) === 3, 'and nothing is deleted yet')
 
 await del.click()
-await waitRows(bob, 'todos', 1)
+await bob.waitForFunction(
+  () => document.querySelectorAll('[data-panel="agenda"] .row').length === 2, null,
+  { timeout: 15000 })
 ok(true, 'confirming removes it, for both participants')
 
 await browser.close()

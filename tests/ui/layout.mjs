@@ -87,5 +87,50 @@ await page.reload()
 await sleep(1500)
 ok((await themeNow()) === 'day', 'and the choice survives a reload')
 
+// --- The split is the user's. Nothing here can be checked without a real
+//     pointer: the drag, whether the video reflows, whether it is remembered.
+await sleep(1500)
+const sidebarWidth = () =>
+  page.locator('.sidebar').boundingBox().then((b) => Math.round(b?.width ?? 0))
+
+const before = await sidebarWidth()
+const handle = await page.locator('.divider').boundingBox()
+await page.mouse.move(handle.x + 5, handle.y + 60)
+await page.mouse.down()
+await page.mouse.move(handle.x - 300, handle.y + 60, { steps: 10 })
+await page.mouse.up()
+await sleep(300)
+
+const dragged = await sidebarWidth()
+// An earlier version re-registered its listeners on every move, and the cleanup
+// ended the drag: the divider moved one step and let go.
+ok(dragged > before + 200,
+  `dragging the divider really widens the panel (${before} → ${dragged})`)
+
+const tile = await page.locator('.video-tile').first().boundingBox()
+ok(tile.width < 900, `and the video gives up the width it took (${Math.round(tile.width)}px)`)
+
+await page.reload()
+await sleep(2500)
+const remembered = await sidebarWidth()
+ok(Math.abs(remembered - dragged) < 20,
+  `the split is remembered across a reload (${dragged} → ${remembered})`)
+
+// Keyboard, because a layout adjustable by pointer only is adjustable by some
+// people only.
+await page.locator('.divider').focus()
+await page.keyboard.press('ArrowRight')
+await sleep(200)
+ok((await sidebarWidth()) < remembered, 'and the arrow keys move it too')
+
+// --- Tile size, independent of the split.
+const gridWidth = await page.locator('.video-grid').boundingBox().then((b) => b.width)
+const smallTile = await page.locator('.video-tile').first().boundingBox()
+await page.getByLabel('放大視訊').click()
+await sleep(250)
+const bigTile = await page.locator('.video-tile').first().boundingBox()
+ok(bigTile.width > smallTile.width || gridWidth < 400,
+  `the zoom control resizes the tiles (${Math.round(smallTile.width)} → ${Math.round(bigTile.width)})`)
+
 await browser.close()
 done('UI-LAYOUT')

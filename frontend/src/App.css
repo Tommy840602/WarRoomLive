@@ -88,19 +88,122 @@
   font-size: 0.9rem;
 }
 
+/* The split is the user's, not the layout's: a room watching a presenter wants
+   the video large, a room working the agenda wants a real week view, and the
+   app cannot tell which from the outside. Both variables come from App.tsx and
+   are stored per browser. */
 .workspace {
   display: grid;
-  grid-template-columns: 1fr 320px;
-  gap: 1rem;
+  grid-template-columns: 1fr auto var(--sidebar-width, 320px);
+  gap: 0.5rem;
   margin-top: 1.5rem;
   align-items: start;
 }
 
+.stage {
+  min-width: 0;
+  position: relative;
+}
 
 .video-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile-min, 240px), 1fr));
   gap: 1rem;
+}
+
+/* --- The divider ---------------------------------------------------------
+   Wider than it looks: the visible line is 1px, the grab area either side of
+   it is not, because a 1px drag target is a target nobody hits. */
+.divider {
+  align-self: stretch;
+  width: 11px;
+  min-height: 8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.divider__grip {
+  width: 1px;
+  height: 100%;
+  background: var(--line);
+  transition: background-color 120ms ease, width 120ms ease;
+}
+
+.divider:hover .divider__grip,
+.divider:focus-visible .divider__grip {
+  width: 3px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+.divider:focus-visible {
+  outline: none;
+}
+
+/* While dragging, nothing on the page should select or flash a text cursor. */
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* --- Tile size -----------------------------------------------------------
+   Sits over the video rather than in the room controls, because it changes
+   what this screen shows and nothing anyone else sees. */
+.zoom {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0.1rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+/* Out of the way until wanted — but never for the keyboard, which cannot
+   hover and would otherwise be offered an invisible control. */
+.stage:hover .zoom,
+.zoom:focus-within {
+  opacity: 1;
+}
+
+.zoom__btn {
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--on-tile);
+  cursor: pointer;
+  width: 1.4rem;
+  height: 1.4rem;
+  font-size: 0.9rem;
+  line-height: 1;
+  font-family: inherit;
+}
+
+.zoom__btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.zoom__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.zoom__level {
+  color: var(--on-tile);
+  font-size: 0.62rem;
+  opacity: 0.7;
+  padding: 0 0.15rem;
 }
 
 .video-tile {
@@ -271,8 +374,7 @@
 }
 
 .sidebar[data-active='members'] .sidebar__panel[data-panel='members'],
-.sidebar[data-active='todos'] .sidebar__panel[data-panel='todos'],
-.sidebar[data-active='calendar'] .sidebar__panel[data-panel='calendar'],
+.sidebar[data-active='agenda'] .sidebar__panel[data-panel='agenda'],
 .sidebar[data-active='recordings'] .sidebar__panel[data-panel='recordings'],
 .sidebar[data-active='search'] .sidebar__panel[data-panel='search'],
 .sidebar[data-active='files'] .sidebar__panel[data-panel='files'],
@@ -1011,14 +1113,23 @@
   cursor: default;
 }
 
-/* --- Agenda: the shared list and the calendar ----------------------------
-   Both are the same shape, because to a room they are the same act — something
-   we said we would do, and when. Every row leads with a relative-time rail in
-   the same column, so the panel is read down that column rather than across
-   each line. That rail is the one loud thing here; everything else is quiet. */
+/* --- Agenda: one board -----------------------------------------------------
+   There is no list and no calendar here, only items and three bands that say
+   when the room means to deal with them. The bands are the structure — the eye
+   should land on 現在 and stop — so they carry a left rule in the accent and
+   everything inside them stays quiet. The triage control is the one thing on a
+   row with any weight, because moving an item between bands is the act this
+   board exists for. */
 
+/* A card, like every other side panel. The sticky band headings paint over
+   the rows as they scroll under, so they need the same ground the panel has —
+   on the page background they read as stripes laid across it instead. */
 .agenda {
-  border-top: 1px solid var(--line);
+  transition: var(--skin-fade);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1038,6 +1149,33 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-dim);
+}
+
+/* Two views of one agenda, so this reads as a switch and not as navigation. */
+.agenda__views {
+  display: inline-flex;
+  gap: 0.1rem;
+}
+
+.agenda__view {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.72rem;
+  font-family: inherit;
+}
+
+.agenda__view:hover {
+  color: var(--ink-dim);
+}
+
+.agenda__view[aria-pressed='true'] {
+  color: var(--ink-dim);
+  border-bottom-color: var(--line-strong);
 }
 
 .agenda__count {
@@ -1117,26 +1255,53 @@
   color: var(--ink);
 }
 
-.capture__read--needs .capture__read-label {
-  color: var(--warn);
-}
+/* --- Bands --- */
 
-.capture__read-hint {
-  color: var(--ink-faint);
-}
-
-/* --- Rows --- */
-
-.agenda__list,
-.day__entries {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.agenda__list {
+.board {
   overflow-y: auto;
-  max-height: 44vh;
+  max-height: 46vh;
+}
+
+.band {
+  padding-bottom: 0.35rem;
+}
+
+/* The accent rule is the whole hierarchy: 現在 is the band you are meant to
+   read, so only it is drawn in the accent. Giving all three a colour would be
+   three emphases, which is none. */
+.band__label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.5rem 0.9rem 0.2rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
+.band--now .band__label {
+  color: var(--accent);
+}
+
+.band--now {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.band__count {
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
+.band__empty {
+  margin: 0;
+  padding: 0 0.9rem 0.4rem;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
 }
 
 .agenda__empty,
@@ -1154,41 +1319,18 @@
   color: var(--danger);
 }
 
+/* --- Rows --- */
+
 .row {
   display: grid;
-  /* check | time rail | body | drop — the rail is a fixed column so the times
-     line up between rows and the eye can run down it. */
-  grid-template-columns: auto 5.5rem 1fr auto;
+  grid-template-columns: auto 1fr auto;
   align-items: baseline;
   gap: 0.5rem;
-  padding: 0.32rem 0.9rem;
+  padding: 0.3rem 0.9rem;
 }
 
 .row:hover {
   background: var(--surface-hover);
-}
-
-.row__check {
-  accent-color: var(--accent);
-  margin: 0;
-  align-self: center;
-}
-
-.row__when {
-  font-size: 0.72rem;
-  color: var(--ink-faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.row__when--overdue {
-  color: var(--danger);
-  font-weight: 600;
-}
-
-.row__when--soon {
-  color: var(--accent);
 }
 
 .row__body {
@@ -1211,8 +1353,8 @@
   overflow-wrap: anywhere;
 }
 
-/* A finished item stays in place but recedes — the list is about what is open,
-   and removing it would lose the record of who closed it. */
+/* A finished item stays in place but recedes — the board is about what is
+   open, and removing it would lose the record of who closed it. */
 .row--done .row__text {
   text-decoration: line-through;
   color: var(--ink-faint);
@@ -1223,19 +1365,65 @@
   border-radius: 5px;
   padding: 0.1rem 0.4rem;
   background: transparent;
-  color: var(--ink-faint);
+  color: transparent;
   cursor: pointer;
   font-size: 0.85rem;
   line-height: 1.4;
 }
 
-.row:hover .row__drop {
-  color: var(--ink-dim);
+/* Hidden until the row is under the pointer or the button has focus: a column
+   of × down the side reads as a list of things to delete. */
+.row:hover .row__drop,
+.row__drop:focus-visible {
+  color: var(--ink-faint);
 }
 
 .row__drop:hover {
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+/* --- Triage --- */
+
+.triage {
+  align-self: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 0.6rem;
+  line-height: 1;
+  padding: 0;
+}
+
+.triage:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.triage--now {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.triage--done {
+  border-color: var(--ok);
+  color: var(--ok);
+  font-size: 0.7rem;
+}
+
+/* A dashed ring means the clock is still deciding this one — the difference
+   between "nobody has looked at this" and "the room decided", which is exactly
+   what an auto-triaging board would otherwise hide. */
+.triage--auto {
+  border-style: dashed;
 }
 
 /* --- Small labels --- */
@@ -1270,22 +1458,283 @@
   padding-left: 0;
 }
 
-/* --- Calendar day grouping --- */
-
-.day__label {
-  margin: 0;
-  padding: 0.5rem 0.9rem 0.15rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  color: var(--accent);
-  position: sticky;
-  top: 0;
-  background: var(--surface);
+/* Which facets an item carries. An outline rather than a fill: a stamp is a
+   fact about the item, not a state worth shouting. */
+.chip--stamp {
+  color: var(--ink-faint);
+  border: 1px solid var(--line);
+  font-size: 0.62rem;
+  padding: 0 0.3rem;
 }
 
-.day .row {
-  grid-template-columns: 5.5rem 1fr auto;
+
+/* --- Calendar grid --------------------------------------------------------
+   A list grouped by day says what is on Thursday; only a grid says whether
+   Thursday afternoon is free, because free time has no rows and the gap
+   between blocks is what a room searching for a slot is actually looking at.
+
+   Everything here is measured, not assumed: the number of day columns comes
+   from the panel's real width (the panel is resizable, so a media query would
+   be measuring the wrong box). */
+
+.grid {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.grid__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.1rem 0.9rem 0.4rem;
+}
+
+.grid__step,
+.grid__today {
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  line-height: 1.3;
+}
+
+.grid__step {
+  font-size: 1rem;
+  padding: 0 0.35rem;
+}
+
+.grid__step:hover,
+.grid__today:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+/* Disabled because you are already there — that is information, not a dead
+   control, so it stays legible. */
+.grid__today:disabled {
+  color: var(--ink-faint);
+  cursor: default;
+}
+
+.grid__range {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+/* The day headings stay put while the hours scroll under them. */
+.grid__head {
+  display: grid;
+  grid-template-columns: var(--grid-gutter) repeat(var(--grid-days), 1fr);
+  border-bottom: 1px solid var(--line);
+}
+
+.grid__corner {
+  display: block;
+}
+
+.grid__day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.05rem;
+  padding: 0.15rem 0 0.3rem;
+  border-left: 1px solid var(--line);
+}
+
+.grid__weekday {
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+
+.grid__date {
+  font-size: 0.95rem;
+  color: var(--ink-dim);
+  line-height: 1.1;
+}
+
+/* Today is the only day named in the accent — marking several would mark none. */
+.grid__day--today .grid__weekday {
+  color: var(--accent);
+}
+
+.grid__day--today .grid__date {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: 50%;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+
+.grid__scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: 42vh;
+  scrollbar-width: thin;
+}
+
+.grid__body {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--grid-gutter) repeat(var(--grid-days), 1fr);
+}
+
+.grid__gutter {
+  position: relative;
+}
+
+/* The hour sits above its line rather than beside it, which is what makes the
+   line read as "09:00 starts here" instead of "this row is the 9 o'clock row". */
+.grid__hour {
+  position: absolute;
+  right: 0.35rem;
+  transform: translateY(-0.4em);
+  font-size: 0.62rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.grid__column {
+  position: relative;
+  border-left: 1px solid var(--line);
+  min-width: 0;
+}
+
+.grid__column--today {
+  background: var(--accent-wash);
+}
+
+.grid__rule {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--line);
+  opacity: 0.45;
+}
+
+.grid__rule--major {
+  opacity: 1;
+}
+
+/* The one moving thing on the page, and the only red: a now-line that is not
+   instantly findable is not doing its job. */
+.grid__now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--danger);
+  z-index: 3;
+  pointer-events: none;
+}
+
+.grid__now::before {
+  content: '';
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+/* --- Blocks --- */
+
+.slot {
+  position: absolute;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  text-align: left;
+  border: none;
+  border-left: 3px solid var(--ink-faint);
+  border-radius: 3px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  cursor: pointer;
+  padding: 0.1rem 0.25rem;
+  font-family: inherit;
+  z-index: 2;
+  /* Lanes butt against each other; the inset is what makes two simultaneous
+     blocks read as two rather than one wide one. */
+  box-shadow: inset -1px 0 0 var(--surface);
+}
+
+.slot:hover {
+  filter: brightness(1.08);
+  z-index: 4;
+}
+
+/* Triage is the colour, exactly as it is on the board — the same item must not
+   mean different things in the two views. */
+.slot--now {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.slot--done {
+  border-left-color: var(--ok);
+  opacity: 0.6;
+}
+
+.slot--done .slot__text {
+  text-decoration: line-through;
+}
+
+.slot__time {
+  font-size: 0.6rem;
+  color: var(--ink-dim);
+  line-height: 1.2;
+}
+
+.slot__text {
+  font-size: 0.68rem;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.slot__confirm {
+  font-size: 0.58rem;
+  color: var(--danger);
+}
+
+/* A half-hour block is about 22px, which is one line — not the two that a time
+   above a title needs. So a short block puts them on one line and drops the
+   title's own ellipsis onto the row instead of clipping it mid-character. */
+.slot--tight {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 0.25rem;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.slot--tight .slot__time {
+  flex: 0 0 auto;
+}
+
+.slot--tight .slot__text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* --- Theme switch --- */
@@ -1374,13 +1823,14 @@
     gap: 0.5rem;
   }
 
-  /* The time rail costs too much of a 390px line; drop it to what fits. */
+  /* Every millimetre of a 390px line goes to the text. */
   .row {
-    grid-template-columns: auto 4.5rem 1fr auto;
     gap: 0.4rem;
+    padding-inline: 0.6rem;
   }
 
-  .day .row {
-    grid-template-columns: 4.5rem 1fr auto;
+  /* No hover on a touch screen, so the delete button has to be there already. */
+  .row__drop {
+    color: var(--ink-faint);
   }
 }

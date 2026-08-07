@@ -29,6 +29,9 @@
   --accent: #f0a020;
   --accent-ink: #10141a;
   --accent-soft: #3a2a0e;
+  /* A wash, not a fill. The calendar tints today's whole column with this, and
+     at --accent-soft's weight it drowned out the blocks drawn on top of it. */
+  --accent-wash: #1a1a17;
 
   --ok: #4ade80;
   --warn: #fbbf24;
@@ -60,6 +63,7 @@
   --accent: #9a6200;
   --accent-ink: #fffaf0;
   --accent-soft: #f6e6c8;
+  --accent-wash: #faf4e8;
 
   --ok: #1f8a4c;
   --warn: #a16207;
