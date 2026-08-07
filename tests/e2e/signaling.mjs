@@ -1,7 +1,7 @@
 // Core signaling plane: peer discovery, the glare asymmetry, point-to-point
 // SDP/ICE relay, chat broadcast + history replay, the room cap, and departure
 // notices. Runs against any stack shape (base, scale, sfu, …).
-import { RUN_ID, done, ok, signalClient, sleep } from './lib.mjs'
+import { RUN_ID, discoverRoomCap, done, ok, signalClient, sleep } from './lib.mjs'
 
 const ROOM = 'e2e-' + RUN_ID
 
@@ -51,23 +51,26 @@ const history = await carol.next('history')
 ok(history.payload.some((m) => m.fromId === 'alice' && m.text === 'hello from e2e' && m.name === 'Alice'),
   'carol receives the chat history replayed from the repository')
 
-// 6. Fill the room to its cap; the next join bounces with room-full.
+// 6. Fill the room to its cap; the next join bounces with room-full. The cap is
+//    configuration (8 by default, 50 under the SFU overlay), so it is read from
+//    the running stack rather than assumed.
+const cap = await discoverRoomCap()
 const extras = []
-for (let i = 0; i < 5; i++) {
+for (let i = carolPeers.payload.length + 1; i < cap; i++) {
   const extra = signalClient('extra' + i, 'Extra' + i)
   await extra.join(ROOM)
   extras.push(extra)
 }
-const ninth = signalClient('ninth', 'Ninth')
-await ninth.opened
-ninth.send({ type: 'join', room: ROOM, from: 'ninth', payload: 'Ninth' })
-const full = await ninth.next('room-full')
-ok(full.payload === 8, 'ninth join rejected with room-full (cap 8)')
+const overflow = signalClient('overflow', 'Overflow')
+await overflow.opened
+overflow.send({ type: 'join', room: ROOM, from: 'overflow', payload: 'Overflow' })
+const full = await overflow.next('room-full')
+ok(full.payload === cap, `the join past the cap is rejected with room-full (cap ${cap})`)
 
 // 7. A dropped connection is announced to the rest of the room.
 bob.close()
 const left = await alice.next('peer-left')
 ok(left.from === 'bob', 'alice receives peer-left after bob disconnects')
-;[alice, carol, ninth, ...extras].forEach((c) => c.close())
+;[alice, carol, overflow, ...extras].forEach((c) => c.close())
 
 done('SIGNALING')

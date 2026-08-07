@@ -75,6 +75,7 @@ docker compose -f docker-compose.yml -f docker-compose.sfu.yml -f docker-compose
 ```
 
 - 房間內(SFU 模式)出現「錄影」按鈕:後端呼叫 **LiveKit Egress** 的 twirp API 啟動 room-composite 錄影(headless Chrome 合成畫面),MP4 直接上傳 **MinIO**(S3 API,bucket `recordings`);LiveKit secret 與儲存憑證都不出後端。離開房間時自動停止。
+- **錄影清單與播放**:錄完的影片會列在房間側邊(時間、長度、大小),點播放即在頁面內播。播放走**預簽 URL**——資料庫只存物件 key,每次點播放才即時簽發一條 30 分鐘有效的連結,物件儲存的憑證永遠不出後端,影音位元組也不經過後端(nginx 直接把請求轉給物件儲存)。webhook 寫入的錄影列與事件同交易提交,重送不會產生重複。
 - **完成通知走 webhook**:LiveKit 以「body 雜湊 JWT」簽名回呼 `/api/livekit/webhook`(後端驗簽),搭配 events 疊加層時轉成 `meeting.recording.completed` 事件進骨幹。
 - **會議領域**(`postgres` profile 自動啟用):第一人加入開啟 `meetings` 列、最後一人離開關閉(含時長與人數峰值);`meeting.started` / `meeting.ended` 與列同交易寫入 outbox。`Backplane.tryRegister/unregister` 回傳叢集人數,多節點下「第一人/最後一人」判定也精準。房間額滿的拒絕會發 `participant.rejected` 事件(權限類稽核)。
 

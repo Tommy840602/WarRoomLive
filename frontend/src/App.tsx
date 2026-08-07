@@ -16,6 +16,7 @@ import { VideoTile } from './components/VideoTile'
 import { ChatPanel } from './components/ChatPanel'
 import { CollabPanel } from './components/CollabPanel'
 import { MemberList, type Member } from './components/MemberList'
+import { RecordingsPanel, type Recording } from './components/RecordingsPanel'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
 import type { MediaState, PeerInfo, RoomStateInfo, StoredMessage } from './signaling/types'
@@ -61,6 +62,7 @@ export default function App() {
   const [roomState, setRoomState] = useState<RoomStateInfo>({ host: '', locked: false })
   const [connection, setConnection] = useState<ConnectionState>('closed')
   const [peerQuality, setPeerQuality] = useState<Map<string, PeerQuality>>(new Map())
+  const [recordings, setRecordings] = useState<Recording[]>([])
 
   const clientRef = useRef<SignalingClient | null>(null)
   const roomRef = useRef<MediaRoom | null>(null)
@@ -134,6 +136,7 @@ export default function App() {
     setNames(new Map())
     setPeerStates(new Map())
     setPeerQuality(new Map())
+    setRecordings([])
     setMessages([])
     setScreenSharing(false)
     setAudioEnabled(true)
@@ -180,6 +183,36 @@ export default function App() {
     if (handRaisedRef.current) {
       client.send({ type: 'hand', room: joined.room, from: selfIdRef.current, payload: true })
     }
+  }, [])
+
+  /**
+   * Loads this room's finished recordings. The endpoint 404s unless the
+   * recording overlay and a database are both present, which is the ordinary
+   * case — an empty list simply hides the panel.
+   */
+  const loadRecordings = useCallback(async (roomName: string) => {
+    try {
+      const headers: HeadersInit = tokenRef.current
+        ? { Authorization: `Bearer ${tokenRef.current}` }
+        : {}
+      const res = await fetch(`/api/recordings/${encodeURIComponent(roomName)}`, { headers })
+      setRecordings(res.ok ? ((await res.json()) as Recording[]) : [])
+    } catch {
+      setRecordings([])
+    }
+  }, [])
+
+  /** Playback URLs expire, so one is minted per press rather than per listing. */
+  const recordingUrl = useCallback(async (id: number) => {
+    const headers: HeadersInit = tokenRef.current
+      ? { Authorization: `Bearer ${tokenRef.current}` }
+      : {}
+    const res = await fetch(
+      `/api/recordings/${encodeURIComponent(joinedAsRef.current?.room ?? '')}/${id}/url`,
+      { headers },
+    )
+    if (!res.ok) throw new Error(`無法取得播放連結(HTTP ${res.status})`)
+    return ((await res.json()) as { url: string }).url
   }, [])
 
   const join = useCallback(async () => {
@@ -330,11 +363,12 @@ export default function App() {
       roomRef.current = mediaRoom
       mediaRoom.join(room, displayName)
       setStatus('in-room')
+      void loadRecordings(room)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setStatus('error')
     }
-  }, [room, name, token, teardown, showReaction])
+  }, [room, name, token, teardown, showReaction, rejoin, loadRecordings])
 
   const leave = useCallback(() => {
     roomRef.current?.leave(room)
@@ -443,6 +477,8 @@ export default function App() {
         })
         recordingIdRef.current = null
         setRecordingId(null)
+        // Egress uploads after the stop call, so give it a moment to land.
+        setTimeout(() => void loadRecordings(room), 4000)
         return
       }
       const res = await fetch(`/api/media/recordings/${encodeURIComponent(room)}/start`, {
@@ -456,7 +492,7 @@ export default function App() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [recordingId, room, token])
+  }, [recordingId, room, token, loadRecordings])
 
   const sendChat = useCallback(
     (text: string) => {
@@ -578,6 +614,9 @@ export default function App() {
               canKick={isHost}
               onKick={kickPeer}
             />
+          )}
+          {status === 'in-room' && recordings.length > 0 && (
+            <RecordingsPanel recordings={recordings} onRequestUrl={recordingUrl} />
           )}
           <ChatPanel
             messages={messages.map((m) => ({
