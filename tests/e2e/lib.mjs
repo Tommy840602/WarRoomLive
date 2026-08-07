@@ -147,6 +147,40 @@ export function signalClient(id, name = id, { token } = {}) {
 // --- collab (CRDT) plane --------------------------------------------------
 
 /**
+ * The room cap in force, found by filling a throwaway room until the server
+ * refuses. The cap is configuration — 8 by default, 50 under the SFU overlay —
+ * so a suite that hard-codes it passes on one stack and fails on another for
+ * no good reason. The server states the cap in the `room-full` payload, and
+ * this checks that claim against the number it actually admitted.
+ */
+export async function discoverRoomCap(probeRoom = 'cap-probe-' + RUN_ID) {
+  const clients = []
+  try {
+    for (let i = 0; i < 200; i++) {
+      const peer = signalClient('probe' + i)
+      await peer.opened
+      clients.push(peer)
+      peer.send({ type: 'join', room: probeRoom, from: peer.id, payload: peer.id })
+      const reply = await Promise.race([
+        peer.next('peers', 8000).then(() => null),
+        peer.next('room-full', 8000).then((m) => m),
+      ])
+      if (reply) {
+        const claimed = reply.payload
+        const admitted = clients.length - 1
+        if (claimed !== admitted) {
+          throw new Error(`server claims cap ${claimed} but admitted ${admitted}`)
+        }
+        return claimed
+      }
+    }
+    throw new Error('room cap not reached within 200 joins')
+  } finally {
+    clients.forEach((c) => c.close())
+  }
+}
+
+/**
  * A Yjs client on the shared document plane. Imported lazily so suites that
  * only touch signaling do not need the Yjs dependencies loaded.
  */

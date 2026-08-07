@@ -31,6 +31,7 @@ changing it.
 | `reconnect` | any stack | The server contract behind client reconnection: an abrupt drop is announced, a re-join restores membership exactly once, a close arriving late for a replaced socket does not evict the live one, and replayed state reaches the room. |
 | `oidc` | oidc overlay | Both WS planes refuse anonymous and forged credentials, and both work with a real token. |
 | `token-lifecycle` | oidc overlay, short TTL | Refresh-token rotation and single use; a connection whose token expired is closed with 4401 on its next message. |
+| `recordings` | sfu + recording overlays | A completed recording becomes a listed, playable item: the signed Egress webhook writes a row (redelivery does not duplicate it), the library lists it, and the presigned URL really serves the object through the proxy while a tampered signature does not. |
 | `events` | events overlay | Activity → outbox → Redpanda → indexer → read models → search API, plus idempotent consumption of a replayed envelope. |
 | `crdt-hardening` | any stack — **destructive** | An edit made inside the snapshot debounce survives SIGKILL of the collab service (update log), oversized updates are refused without harming the room, the log compacts into the snapshot. |
 | `scale` | scale overlay — **destructive** | CRDT convergence across collab replicas; ghost pruning after a backend replica is SIGKILLed without closing its sockets. |
@@ -61,6 +62,9 @@ docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d
   stack that keeps its data, and several can run back to back.
 - Container names are resolved through `docker compose ps`, never hard-coded:
   replica numbering is not stable across recreations.
+- The room cap is discovered from the running stack (`discoverRoomCap`), not
+  assumed: it is 8 by default and 50 under the SFU overlay, so a hard-coded
+  number turns those suites into a test of which overlay happens to be up.
 - The suites assert on observable behaviour (messages, close codes, rows,
   HTTP responses) rather than on logs, except where a log line is the only
   evidence of an internal decision — ghost pruning and node placement.

@@ -6,7 +6,7 @@
 
 | 平面 | 藍圖建議 | 目前實作 | 差距 |
 |---|---|---|---|
-| 媒體 | LiveKit SFU + coturn | 模式切換:預設 mesh(≤8),SFU 疊加層走 LiveKit(上限 50);simulcast + adaptiveStream + dynacast;coturn TURN fallback;Egress 錄影 → MinIO;**每對等連線品質量測與弱網降級、ICE 重啟** | TURN/TLS 443 需真實憑證(部署層);錄影無播放介面 |
+| 媒體 | LiveKit SFU + coturn | 模式切換:預設 mesh(≤8),SFU 疊加層走 LiveKit(上限 50);simulcast + adaptiveStream + dynacast;coturn TURN fallback;Egress 錄影 → MinIO + **清單與預簽 URL 播放**;**每對等連線品質量測與弱網降級、ICE 重啟** | TURN/TLS 443 需真實憑證(部署層) |
 | 業務事件 | Spring WebSocket(STOMP)+ Redis/Kafka backplane | 自訂 JSON envelope(`SignalMessage`);`Backplane` 抽象(單機 / Redis pub-sub + Sentinel HA);transactional outbox → Redpanda + schema registry;**斷線自動重連與重新加入**;**每連線速率/訊框/聊天長度上限** | — |
 | 共同編輯 | TipTap/ProseMirror + Yjs + Hocuspocus + Postgres | ✅ 同組合:`collab/` 服務;update log + debounce 快照 compaction;訊息/文件/速率三重上限;多實例經 Redis 同步 | — |
 | 持久化 | PostgreSQL 為 source of truth | 聊天、筆記快照、outbox、稽核與搜尋讀模型、會議領域皆入 Postgres;Flyway 管 schema(V1–V5);WAL 歸檔 + PITR + 加密物件儲存歸檔 | 跨區域複寫、KMS(部署層) |
@@ -32,8 +32,7 @@
 
 **A. 信令平面的濫用防護** ✅ 已完成:每連線 token bucket(`RateLimiter`,預設 60/s + 2 倍突發)、容器層訊框上限(64 KB)、聊天長度上限(4000 字,寫入資料庫前檢查)。處置依意圖分流——超速丟棄、過長回錯、超大訊框由容器 1009 關閉;每種拒絕皆有指標。以 `RateLimiterTest`(注入時鐘)、`SignalingLimitsIntegrationTest`、`tests/e2e/run.sh limits` 驗證,並重跑 k6 壓測確認正常流量未被誤傷(checks 100%、chat RTT p95 6ms)。
 
-**B. 錄影播放介面(下一項)**
-錄好的 MP4 進了 MinIO,但應用內沒有列出或播放的地方——目前只能到物件儲存翻檔案。需要:會議錄影清單(以 `meeting.recording.completed` 事件為來源)與簽名 URL 播放。
+**B. 錄影播放介面** ✅ 已完成:`recordings` 表(V6)由 webhook 與事件同交易寫入(egress id 冪等),`GET /api/recordings/{room}` 列出、`/{id}/url` 即時簽發 30 分鐘有效的 SigV4 預簽連結;前端側邊面板列出並就地播放。物件儲存憑證不出後端、位元組不經後端(nginx 轉發)。以 `S3PresignerTest`、`tests/e2e/run.sh recordings`(含竄改簽章需被拒)、`tests/ui/run.sh recordings` 驗證。
 
 **C. 需要真實環境才能推進(部署層,非程式碼缺口)**
 真實 IdP(Keycloak/Entra)對接演練、Slack/PagerDuty 告警接收端、TURN/TLS 443 真憑證、跨區域備份複寫與 KMS、目標環境的藍圖級工作負載(20k 連線)。

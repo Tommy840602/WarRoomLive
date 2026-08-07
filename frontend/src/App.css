@@ -609,3 +609,83 @@
 .members__signal--poor {
   color: #f87171;
 }
+
+.recordings {
+  border: 1px solid #2a2f38;
+  border-radius: 10px;
+  background: #12151b;
+  overflow: hidden;
+}
+
+.recordings__title {
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.95rem;
+  border-bottom: 1px solid #2a2f38;
+}
+
+.recordings__list {
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.recordings__item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+}
+
+.recordings__item:hover {
+  background: #1c212b;
+}
+
+.recordings__play {
+  border: none;
+  border-radius: 50%;
+  width: 26px;
+  height: 26px;
+  background: #2f3846;
+  color: #e6e8eb;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.recordings__play:hover {
+  background: #3b82f6;
+}
+
+.recordings__meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.recordings__when {
+  font-size: 0.85rem;
+}
+
+.recordings__detail {
+  font-size: 0.75rem;
+  color: #9aa0a6;
+}
+
+.recordings__player {
+  width: 100%;
+  display: block;
+  background: #000;
+}
+
+.recordings__error {
+  margin: 0;
+  padding: 0.4rem 0.9rem;
+  color: #f87171;
+  font-size: 0.8rem;
+}

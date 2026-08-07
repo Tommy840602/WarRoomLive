@@ -2,11 +2,14 @@
 // 12 clients race into a cap-8 room and the split must be exactly 8/4. On the
 // scale stack the joins land on different backends, so this exercises the
 // Redis Lua path (count + conditional write in one atomic step).
-import { RUN_ID, WS_ORIGIN, done, ok } from './lib.mjs'
+import { RUN_ID, WS_ORIGIN, discoverRoomCap, done, ok } from './lib.mjs'
 
 const ROOM = 'cap-' + RUN_ID
-const ATTEMPTS = 12
-const CAP = Number(process.env.E2E_ROOM_CAP ?? 8)
+// The cap is configuration (8 by default, 50 under the SFU overlay), so it is
+// read from the running stack — a hard-coded number turns this into a test of
+// which overlay happens to be up.
+const CAP = Number(process.env.E2E_ROOM_CAP ?? await discoverRoomCap())
+const ATTEMPTS = CAP + 4
 
 const attempt = (i) => new Promise((resolve) => {
   const ws = new WebSocket(`${WS_ORIGIN}/ws/signal`)

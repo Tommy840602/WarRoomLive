@@ -39,6 +39,7 @@ done
 
 if [ -z "$SUITES" ]; then
   SUITES="media collab room-acl quality"
+  docker compose ps --format '{{.Service}}' 2>/dev/null | grep -qx minio && SUITES="$SUITES recordings"
   [ "$ALL" = "1" ] && SUITES="$SUITES reconnect"
 fi
 

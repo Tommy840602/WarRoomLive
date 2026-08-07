@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nimbusds.jose.crypto.MACVerifier;
 import com.nimbusds.jwt.SignedJWT;
 import com.warroomlive.events.OutboxRecorder;
+import com.warroomlive.recordings.RecordingStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -18,6 +19,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
 
@@ -37,16 +39,20 @@ public class LiveKitWebhookController {
     private final String apiSecret;
     private final ObjectMapper mapper;
     private final ObjectProvider<OutboxRecorder> outbox;
+    /** Present only under the postgres profile; without it recordings are not listed. */
+    private final ObjectProvider<RecordingStore> recordings;
 
     public LiveKitWebhookController(
             @Value("${warroomlive.media.livekit-api-key:}") String apiKey,
             @Value("${warroomlive.media.livekit-api-secret:}") String apiSecret,
             ObjectMapper mapper,
-            ObjectProvider<OutboxRecorder> outbox) {
+            ObjectProvider<OutboxRecorder> outbox,
+            ObjectProvider<RecordingStore> recordings) {
         this.apiKey = apiKey;
         this.apiSecret = apiSecret;
         this.mapper = mapper;
         this.outbox = outbox;
+        this.recordings = recordings;
     }
 
     @PostMapping("/api/livekit/webhook")
@@ -72,9 +78,49 @@ public class LiveKitWebhookController {
         String location = file.path("location").asText(file.path("filename").asText());
         long sizeBytes = file.path("size").asLong();
         log.info("Recording completed for room {} ({}, {} bytes) at {}", room, egressId, sizeBytes, location);
+
+        RecordingStore store = recordings.getIfAvailable();
+        if (store != null) {
+            // The row and the event commit together, so the in-app list and the
+            // backbone cannot disagree about what exists.
+            store.completed(room, egressId, objectKeyOf(location),
+                    sizeBytes, nanosToMillis(file.path("duration").asLong()),
+                    nanosToInstant(info.path("startedAt").asLong()),
+                    nanosToInstant(info.path("endedAt").asLong()));
+            return;
+        }
+        // No database (default profile): the event is all we can offer.
         outbox.ifAvailable(recorder -> recorder.record(
                 "meeting.recording.completed", "room", room,
                 Map.of("egressId", egressId, "location", location, "sizeBytes", sizeBytes)));
+    }
+
+    /**
+     * Egress reports the upload target as a full URL; playback presigns the key
+     * itself, so only the path within the bucket is kept.
+     */
+    private static String objectKeyOf(String location) {
+        int scheme = location.indexOf("://");
+        if (scheme < 0) {
+            return location.startsWith("/") ? location.substring(1) : location;
+        }
+        String withoutScheme = location.substring(scheme + 3);
+        int firstSlash = withoutScheme.indexOf('/');
+        if (firstSlash < 0) {
+            return withoutScheme;
+        }
+        String path = withoutScheme.substring(firstSlash + 1);
+        // Path-style endpoints put the bucket first; drop it, the store knows it.
+        int bucketEnd = path.indexOf('/');
+        return bucketEnd < 0 ? path : path.substring(bucketEnd + 1);
+    }
+
+    private static long nanosToMillis(long nanos) {
+        return nanos / 1_000_000L;
+    }
+
+    private static Instant nanosToInstant(long epochNanos) {
+        return epochNanos <= 0 ? null : Instant.ofEpochMilli(epochNanos / 1_000_000L);
     }
 
     /** LiveKit webhook auth: HS256 JWT (iss = api key) whose sha256 claim hashes the body. */
