@@ -980,6 +980,225 @@
   cursor: default;
 }
 
+/* --- Shared to-do list --------------------------------------------------- */
+
+.todos,
+.calendar {
+  border-top: 1px solid #2a2f37;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.todos__title,
+.calendar__title {
+  margin: 0;
+  padding: 0.6rem 0.9rem 0.4rem;
+  font-size: 0.85rem;
+  color: #9aa0a6;
+  font-weight: 600;
+}
+
+.todos__form,
+.calendar__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0 0.9rem 0.5rem;
+}
+
+.todos__row,
+.calendar__row {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.todos input,
+.calendar input {
+  min-width: 0;
+  background: #1b1f24;
+  border: 1px solid #2a2f37;
+  border-radius: 6px;
+  color: #e6e8eb;
+  padding: 0.3rem 0.45rem;
+  font-size: 0.8rem;
+}
+
+.todos__text,
+.calendar__subject {
+  width: 100%;
+}
+
+.todos__row input,
+.calendar__row input {
+  flex: 1 1 0;
+}
+
+.todos__form button,
+.calendar__form button {
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 6px;
+  background: #2f3846;
+  color: #e6e8eb;
+  cursor: pointer;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.todos__form button:disabled,
+.calendar__form button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.todos__error,
+.calendar__error {
+  margin: 0;
+  padding: 0.4rem 0.9rem;
+  color: #f87171;
+  font-size: 0.8rem;
+}
+
+.calendar__empty {
+  margin: 0;
+  padding: 0.4rem 0.9rem;
+  color: #9aa0a6;
+  font-size: 0.8rem;
+}
+
+.todos__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  max-height: 40vh;
+}
+
+.todos__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.35rem 0.9rem;
+}
+
+.todos__item:hover {
+  background: #23272e;
+}
+
+/* Done items stay in place but recede — the list is about what is still open. */
+.todos__item--done .todos__body {
+  text-decoration: line-through;
+  color: #9aa0a6;
+}
+
+.todos__meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.todos__body {
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.todos__detail {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.72rem;
+  color: #9aa0a6;
+  flex-wrap: wrap;
+}
+
+.todos__who {
+  color: #60a5fa;
+}
+
+.todos__due-at--overdue {
+  color: #f87171;
+}
+
+.todos__delete,
+.calendar__delete {
+  border: none;
+  border-radius: 6px;
+  padding: 0.2rem 0.45rem;
+  background: transparent;
+  color: #9aa0a6;
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+}
+
+.todos__delete:hover,
+.calendar__delete:hover {
+  background: #7f1d1d;
+  color: #fee2e2;
+}
+
+/* --- Shared calendar ----------------------------------------------------- */
+
+.calendar__list,
+.calendar__entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.calendar__list {
+  overflow-y: auto;
+  max-height: 40vh;
+}
+
+.calendar__day-label {
+  margin: 0;
+  padding: 0.35rem 0.9rem 0.15rem;
+  font-size: 0.72rem;
+  color: #60a5fa;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: #12151b;
+}
+
+.calendar__entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.25rem 0.9rem;
+}
+
+.calendar__entry:hover {
+  background: #23272e;
+}
+
+.calendar__when {
+  font-size: 0.75rem;
+  color: #9aa0a6;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.calendar__meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.calendar__subject-text {
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.calendar__description {
+  font-size: 0.72rem;
+  color: #9aa0a6;
+  overflow-wrap: anywhere;
+}
+
 /* --- Narrow screens ------------------------------------------------------
    Below this width the two-column workspace becomes one, and the sidebar's
    five stacked panels become a tab strip: on a phone, stacking them means the
@@ -1037,6 +1256,8 @@
   }
 
   .sidebar[data-active='members'] .sidebar__panel[data-panel='members'],
+  .sidebar[data-active='todos'] .sidebar__panel[data-panel='todos'],
+  .sidebar[data-active='calendar'] .sidebar__panel[data-panel='calendar'],
   .sidebar[data-active='recordings'] .sidebar__panel[data-panel='recordings'],
   .sidebar[data-active='search'] .sidebar__panel[data-panel='search'],
   .sidebar[data-active='files'] .sidebar__panel[data-panel='files'],

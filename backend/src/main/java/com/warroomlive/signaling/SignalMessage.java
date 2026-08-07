@@ -62,6 +62,8 @@ public record SignalMessage(
     public static final String TYPE_ROOM_STATE = "room-state";
     /** Server-originated: a file was shared into the room, so listeners refresh their list. */
     public static final String TYPE_ATTACHMENT = "attachment";
+    /** Server-originated: the room's to-do list or calendar changed; payload names which. */
+    public static final String TYPE_AGENDA = "agenda";
     public static final String TYPE_ROOM_FULL = "room-full";
     public static final String TYPE_ROOM_LOCKED = "room-locked";
     public static final String TYPE_ERROR = "error";

@@ -1,5 +1,9 @@
 package com.warroomlive.retention;
 
+import com.warroomlive.agenda.CalendarEventEntity;
+import com.warroomlive.agenda.CalendarStore;
+import com.warroomlive.agenda.TodoEntity;
+import com.warroomlive.agenda.TodoStore;
 import com.warroomlive.attachments.AttachmentEntity;
 import com.warroomlive.attachments.AttachmentStore;
 import com.warroomlive.recordings.RecordingEntity;
@@ -22,8 +26,8 @@ import java.util.List;
  * Deletes data that has outlived its retention period.
  *
  * <p>Everything durable here grew without bound: recordings and their MP4s,
- * shared files and theirs, chat and its search projection, the audit trail,
- * published outbox rows. Only the
+ * shared files and theirs, chat and its search projection, the to-do list and
+ * the calendar, the audit trail, published outbox rows. Only the
  * CRDT log compacts itself. For a meeting product that is not only a storage
  * bill — recordings and transcripts of people's meetings kept forever are a
  * privacy and compliance problem, and "we never delete anything" is not an
@@ -56,6 +60,8 @@ public class RetentionService {
     private final EntityManager entityManager;
     private final RecordingStore recordings;
     private final AttachmentStore attachments;
+    private final TodoStore todos;
+    private final CalendarStore calendar;
     private final TransactionTemplate tx;
     private final MeterRegistry metrics;
 
@@ -64,21 +70,27 @@ public class RetentionService {
     private final Duration auditRetention;
     private final Duration publishedEventRetention;
     private final Duration attachmentRetention;
+    private final Duration agendaRetention;
 
     public RetentionService(
             EntityManager entityManager,
             RecordingStore recordings,
             AttachmentStore attachments,
+            TodoStore todos,
+            CalendarStore calendar,
             TransactionTemplate tx,
             MeterRegistry metrics,
             @Value("${warroomlive.retention.recordings-days:0}") int recordingDays,
             @Value("${warroomlive.retention.chat-days:0}") int chatDays,
             @Value("${warroomlive.retention.audit-days:0}") int auditDays,
             @Value("${warroomlive.retention.published-events-days:0}") int publishedEventDays,
-            @Value("${warroomlive.retention.attachments-days:0}") int attachmentDays) {
+            @Value("${warroomlive.retention.attachments-days:0}") int attachmentDays,
+            @Value("${warroomlive.retention.agenda-days:0}") int agendaDays) {
         this.entityManager = entityManager;
         this.recordings = recordings;
         this.attachments = attachments;
+        this.todos = todos;
+        this.calendar = calendar;
         this.tx = tx;
         this.metrics = metrics;
         this.recordingRetention = Duration.ofDays(recordingDays);
@@ -86,6 +98,7 @@ public class RetentionService {
         this.auditRetention = Duration.ofDays(auditDays);
         this.publishedEventRetention = Duration.ofDays(publishedEventDays);
         this.attachmentRetention = Duration.ofDays(attachmentDays);
+        this.agendaRetention = Duration.ofDays(agendaDays);
     }
 
     /**
@@ -99,6 +112,7 @@ public class RetentionService {
         try {
             purgeRecordings();
             purgeAttachments();
+            purgeAgenda();
             purgeChat();
             purgeAudit();
             purgePublishedEvents();
@@ -168,6 +182,42 @@ public class RetentionService {
             }
         }
         report("attachments", removed, attachmentRetention);
+        return removed;
+    }
+
+    /**
+     * The to-do list and the calendar age out together.
+     *
+     * <p>They share one period because they are one thing to the people using
+     * them — what the room decided to do, and when. Keeping the tasks while the
+     * meetings they belong to vanish would leave a list nobody can place.
+     *
+     * <p>Unlike recordings and files these own no objects, so they go through
+     * the stores' bulk delete rather than one at a time.
+     */
+    int purgeAgenda() {
+        if (agendaRetention.isZero()) {
+            return 0;
+        }
+        Instant cutoff = Instant.now().minus(agendaRetention);
+        int removed = 0;
+        for (int pass = 0; pass < MAX_BATCHES; pass++) {
+            List<TodoEntity> expired = todos.expiredBefore(cutoff, BATCH);
+            if (expired.isEmpty()) {
+                break;
+            }
+            todos.deleteAll(expired);
+            removed += expired.size();
+        }
+        for (int pass = 0; pass < MAX_BATCHES; pass++) {
+            List<CalendarEventEntity> expired = calendar.expiredBefore(cutoff, BATCH);
+            if (expired.isEmpty()) {
+                break;
+            }
+            calendar.deleteAll(expired);
+            removed += expired.size();
+        }
+        report("agenda", removed, agendaRetention);
         return removed;
     }
 

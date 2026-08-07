@@ -86,6 +86,10 @@ warroomlive:
     audit-days: ${RETENTION_AUDIT_DAYS:0}
     published-events-days: ${RETENTION_PUBLISHED_EVENTS_DAYS:0}
     attachments-days: ${RETENTION_ATTACHMENTS_DAYS:0}
+    # The to-do list and the calendar share one period: they are one thing to
+    # the people using them, and keeping tasks whose meetings have gone leaves a
+    # list nobody can place.
+    agenda-days: ${RETENTION_AGENDA_DAYS:0}
     interval-ms: ${RETENTION_INTERVAL_MS:3600000}
     initial-delay-ms: ${RETENTION_INITIAL_DELAY_MS:60000}
 

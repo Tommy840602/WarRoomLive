@@ -38,7 +38,7 @@ for arg in "$@"; do
 done
 
 if [ -z "$SUITES" ]; then
-  SUITES="media collab room-acl quality layout"
+  SUITES="media collab room-acl quality layout agenda"
   docker compose ps --format '{{.Service}}' 2>/dev/null | grep -qx minio \
     && SUITES="$SUITES recordings files"
   [ "$ALL" = "1" ] && SUITES="$SUITES reconnect"

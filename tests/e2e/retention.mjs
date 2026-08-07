@@ -46,6 +46,14 @@ psql(`INSERT INTO outbox_events (event_id, event_type, aggregate_type, aggregate
   + `(gen_random_uuid(), 'chat.message.created', 'room', '${ROOM}', '{}'::jsonb, now() - interval '30 days', NULL), `
   + `(gen_random_uuid(), 'chat.message.created', 'room', '${ROOM}', '{}'::jsonb, now(), now())`)
 
+// --- The to-do list and the calendar, on both sides of the cutoff.
+psql(`INSERT INTO todos (room, text, created_by, created_at) VALUES `
+  + `('${ROOM}', 'ancient task', 'u', now() - interval '30 days'), `
+  + `('${ROOM}', 'fresh task', 'u', now())`)
+psql(`INSERT INTO calendar_events (room, title, starts_at, created_by, created_at) VALUES `
+  + `('${ROOM}', 'ancient meeting', now(), 'u', now() - interval '30 days'), `
+  + `('${ROOM}', 'fresh meeting', now(), 'u', now())`)
+
 // --- Recordings, when the object store is part of this stack. The sweeper has
 // to be started from the same overlays, or it inherits a backend with no
 // object-store credentials and correctly declines to delete anything.
@@ -53,12 +61,18 @@ const RECORDING_COMPOSE = compose('sfu', 'recording')
 const hasObjects = containersOf('minio', RECORDING_COMPOSE).length > 0
 const SWEEPER_COMPOSE = hasObjects ? RECORDING_COMPOSE : COMPOSE
 const OBJECT_KEY = `${ROOM}-old.mp4`
+const ATTACHMENT_KEY = `${ROOM}-old.txt`
 if (hasObjects) {
   sh(`${RECORDING_COMPOSE} exec -T minio sh -c "printf 'x' > /tmp/${OBJECT_KEY}; `
     + `mc alias set local http://localhost:9000 warroom warroomsecret >/dev/null 2>&1 || true; `
     + `mc cp /tmp/${OBJECT_KEY} local/recordings/${OBJECT_KEY}"`)
   psql(`INSERT INTO recordings (room, egress_id, object_key, size_bytes, duration_ms, ended_at) `
     + `VALUES ('${ROOM}', 'EG_RET_${RUN_ID}', '${OBJECT_KEY}', 1, 1000, now() - interval '30 days')`)
+
+  sh(`${RECORDING_COMPOSE} exec -T minio sh -c "printf 'y' > /tmp/${ATTACHMENT_KEY}; `
+    + `mc cp /tmp/${ATTACHMENT_KEY} local/recordings/${ATTACHMENT_KEY}"`)
+  psql(`INSERT INTO attachments (room, object_key, filename, size_bytes, uploaded_by, uploaded_at) `
+    + `VALUES ('${ROOM}', '${ATTACHMENT_KEY}', 'old.txt', 1, 'u', now() - interval '30 days')`)
 }
 
 const count = (sql) => Number(psql(sql))
@@ -68,14 +82,19 @@ const auditRows = () => count(`SELECT count(*) FROM audit_log WHERE aggregate_id
 const outboxRows = (where) =>
   count(`SELECT count(*) FROM outbox_events WHERE aggregate_id = '${ROOM}'${where}`)
 const recordingRows = () => count(`SELECT count(*) FROM recordings WHERE room = '${ROOM}'`)
+const todoRows = () => count(`SELECT count(*) FROM todos WHERE room = '${ROOM}'`)
+const calendarRows = () => count(`SELECT count(*) FROM calendar_events WHERE room = '${ROOM}'`)
+const attachmentRows = () => count(`SELECT count(*) FROM attachments WHERE room = '${ROOM}'`)
 
-ok(chatRows() === 2 && searchRows() === 2 && auditRows() === 2 && outboxRows('') === 3,
+ok(chatRows() === 2 && searchRows() === 2 && auditRows() === 2 && outboxRows('') === 3
+  && todoRows() === 2 && calendarRows() === 2,
   'seeded rows on both sides of the cutoff')
 
 // --- Run a sweeper: same image, retention on, first pass two seconds in.
 const sweeper = sh(`${SWEEPER_COMPOSE} run -d --rm --no-deps `
   + `-e RETENTION_CHAT_DAYS=7 -e RETENTION_AUDIT_DAYS=7 `
   + `-e RETENTION_PUBLISHED_EVENTS_DAYS=7 -e RETENTION_RECORDINGS_DAYS=7 `
+  + `-e RETENTION_ATTACHMENTS_DAYS=7 -e RETENTION_AGENDA_DAYS=7 `
   + `-e RETENTION_INITIAL_DELAY_MS=2000 -e RETENTION_INTERVAL_MS=5000 `
   + `backend`)
 
@@ -99,7 +118,22 @@ try {
   ok(outboxRows(' AND published_at IS NULL') === 1,
     'an old UNPUBLISHED outbox row survives — it is the queue, not history')
 
+  await until('the old to-do is removed', () => todoRows() === 1, 30_000, 1000)
+  ok(psql(`SELECT text FROM todos WHERE room = '${ROOM}'`) === 'fresh task',
+    'the to-do it kept is the recent one')
+
+  await until('the old calendar entry is removed', () => calendarRows() === 1, 30_000, 1000)
+  ok(psql(`SELECT title FROM calendar_events WHERE room = '${ROOM}'`) === 'fresh meeting',
+    'the calendar entry it kept is the recent one')
+
   if (hasObjects) {
+    await until('the expired attachment row is removed', () => attachmentRows() === 0, 60_000, 1000)
+    ok(true, 'the expired shared file is removed')
+    const files = sh(`${RECORDING_COMPOSE} exec -T minio sh -c `
+      + `"mc ls local/recordings/${ATTACHMENT_KEY} 2>&1 || true"`)
+    ok(!files.includes(ATTACHMENT_KEY),
+      'and its object is gone from the bucket, not just its row')
+
     await until('the expired recording row is removed', () => recordingRows() === 0, 60_000, 1000)
     ok(true, 'the expired recording row is removed')
     const objects = sh(`${RECORDING_COMPOSE} exec -T minio sh -c `
@@ -116,6 +150,9 @@ try {
   psql(`DELETE FROM audit_log WHERE aggregate_id = '${ROOM}'`)
   psql(`DELETE FROM outbox_events WHERE aggregate_id = '${ROOM}'`)
   psql(`DELETE FROM recordings WHERE room = '${ROOM}'`)
+  psql(`DELETE FROM attachments WHERE room = '${ROOM}'`)
+  psql(`DELETE FROM todos WHERE room = '${ROOM}'`)
+  psql(`DELETE FROM calendar_events WHERE room = '${ROOM}'`)
 }
 
 done('RETENTION')

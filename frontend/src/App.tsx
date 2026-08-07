@@ -19,9 +19,19 @@ import { MemberList, type Member } from './components/MemberList'
 import { RecordingsPanel, type Recording } from './components/RecordingsPanel'
 import { FilesPanel } from './components/FilesPanel'
 import { SearchPanel, SEARCH_PAGE_SIZE, type SearchHit } from './components/SearchPanel'
+import { TodoPanel, localInputToInstant } from './components/TodoPanel'
+import { CalendarPanel } from './components/CalendarPanel'
 import { ReactionBar } from './components/ReactionBar'
 import { FloatingReactions, type FloatingReaction } from './components/FloatingReactions'
-import type { Attachment, MediaState, PeerInfo, RoomStateInfo, StoredMessage } from './signaling/types'
+import type {
+  Attachment,
+  CalendarEvent,
+  MediaState,
+  PeerInfo,
+  RoomStateInfo,
+  StoredMessage,
+  Todo,
+} from './signaling/types'
 import type { PeerQuality } from './webrtc/quality'
 import { useAuth } from './auth/AuthGate'
 import './App.css'
@@ -42,7 +52,7 @@ interface ChatEntry {
 }
 
 /** The side panels a narrow screen shows one at a time. */
-type SidebarTab = 'members' | 'recordings' | 'search' | 'files' | 'chat'
+type SidebarTab = 'members' | 'todos' | 'calendar' | 'recordings' | 'search' | 'files' | 'chat'
 
 export default function App() {
   const { token, displayName: authName } = useAuth()
@@ -72,6 +82,11 @@ export default function App() {
   // The panel is offered only where an upload could actually succeed: the list
   // endpoint 404s without an object store, so its response is the answer.
   const [fileSharingAvailable, setFileSharingAvailable] = useState(false)
+  const [todos, setTodos] = useState<Todo[]>([])
+  const [calendar, setCalendar] = useState<CalendarEvent[]>([])
+  // The shared list and calendar need a database; without one the endpoints
+  // 404 and the panels are not offered rather than failing on every action.
+  const [agendaAvailable, setAgendaAvailable] = useState(false)
   // Which side panel is showing on a narrow screen. Chat is the default because
   // it is the one people keep open; on a wide screen this is ignored entirely.
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('chat')
@@ -162,6 +177,9 @@ export default function App() {
     setRecordings([])
     setFiles([])
     setFileSharingAvailable(false)
+    setTodos([])
+    setCalendar([])
+    setAgendaAvailable(false)
     setMessages([])
     setScreenSharing(false)
     setAudioEnabled(true)
@@ -330,6 +348,89 @@ export default function App() {
     await loadFiles(roomName)
   }, [loadFiles])
 
+  /** Loads the room's shared to-do list and calendar. */
+  const loadAgenda = useCallback(async (roomName: string) => {
+    const room = encodeURIComponent(roomName)
+    try {
+      const [todoRes, calendarRes] = await Promise.all([
+        fetch(`/api/todos/${room}`, { headers: authHeaders() }),
+        fetch(`/api/calendar/${room}`, { headers: authHeaders() }),
+      ])
+      setAgendaAvailable(todoRes.ok && calendarRes.ok)
+      setTodos(todoRes.ok ? ((await todoRes.json()) as Todo[]) : [])
+      setCalendar(calendarRes.ok ? ((await calendarRes.json()) as CalendarEvent[]) : [])
+    } catch {
+      setAgendaAvailable(false)
+      setTodos([])
+      setCalendar([])
+    }
+  }, [authHeaders])
+
+  /**
+   * Sends an agenda change and reloads. The list is refetched rather than
+   * patched locally because the server owns the ordering — open items first,
+   * then soonest-due — and guessing it here is how two people end up looking at
+   * different "first" items.
+   */
+  const agendaWrite = useCallback(
+    async (path: string, init: RequestInit) => {
+      const roomName = joinedAsRef.current?.room ?? ''
+      const res = await fetch(path, {
+        ...init,
+        headers: { ...authHeaders(), 'content-type': 'application/json' },
+      })
+      if (!res.ok) {
+        const detail = (await res.json().catch(() => null)) as { detail?: string } | null
+        throw new Error(
+          res.status === 403
+            ? '只有主持人可以刪除'
+            : detail?.detail ?? `操作失敗(HTTP ${res.status})`,
+        )
+      }
+      await loadAgenda(roomName)
+    },
+    [authHeaders, loadAgenda],
+  )
+
+  const roomPath = () => encodeURIComponent(joinedAsRef.current?.room ?? '')
+
+  const addTodo = useCallback(
+    (text: string, assignee: string, dueAt: string) =>
+      agendaWrite(`/api/todos/${roomPath()}`, {
+        method: 'POST',
+        body: JSON.stringify({ text, assignee, dueAt: localInputToInstant(dueAt) }),
+      }),
+    [agendaWrite],
+  )
+
+  const toggleTodo = useCallback(
+    (id: number, done: boolean) =>
+      agendaWrite(`/api/todos/${roomPath()}/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ done }),
+      }),
+    [agendaWrite],
+  )
+
+  const deleteTodo = useCallback(
+    (id: number) => agendaWrite(`/api/todos/${roomPath()}/${id}`, { method: 'DELETE' }),
+    [agendaWrite],
+  )
+
+  const addCalendarEvent = useCallback(
+    (title: string, startsAt: string, endsAt: string) =>
+      agendaWrite(`/api/calendar/${roomPath()}`, {
+        method: 'POST',
+        body: JSON.stringify({ title, startsAt, endsAt }),
+      }),
+    [agendaWrite],
+  )
+
+  const deleteCalendarEvent = useCallback(
+    (id: number) => agendaWrite(`/api/calendar/${roomPath()}/${id}`, { method: 'DELETE' }),
+    [agendaWrite],
+  )
+
   /**
    * Runs a chat search. The results come from the indexer's read model, so the
    * endpoint is absent unless the events overlay is running — which is reported
@@ -431,6 +532,11 @@ export default function App() {
       // Someone shared a file. The event carries it, but the list is refetched
       // so what is shown is the server's ordering, not an append guess.
       client.on('attachment', () => void loadFiles(room))
+      // Someone changed the shared list or calendar; refetch the affected one.
+      client.on('agenda', (msg) => {
+        const kind = (msg.payload as { kind?: string } | undefined)?.kind
+        if (kind === 'todo' || kind === 'calendar') void loadAgenda(room)
+      })
       client.on('room-locked', () => {
         teardown()
         setError('房間已被主持人鎖定,目前不開放加入')
@@ -519,11 +625,12 @@ export default function App() {
       setStatus('in-room')
       void loadRecordings(room)
       void loadFiles(room)
+      void loadAgenda(room)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setStatus('error')
     }
-  }, [room, name, token, teardown, showReaction, rejoin, loadRecordings, loadFiles])
+  }, [room, name, token, teardown, showReaction, rejoin, loadRecordings, loadFiles, loadAgenda])
 
   const leave = useCallback(() => {
     roomRef.current?.leave(room)
@@ -582,6 +689,9 @@ export default function App() {
   const sidebarPanels = useMemo(() => {
     const panels: { id: SidebarTab; label: string }[] = []
     if (status === 'in-room') panels.push({ id: 'members', label: '成員' })
+    if (status === 'in-room' && agendaAvailable) {
+      panels.push({ id: 'todos', label: '待辦' }, { id: 'calendar', label: '行事曆' })
+    }
     if (status === 'in-room' && recordings.length > 0) {
       panels.push({ id: 'recordings', label: '錄影' })
     }
@@ -589,7 +699,7 @@ export default function App() {
     if (status === 'in-room' && fileSharingAvailable) panels.push({ id: 'files', label: '檔案' })
     panels.push({ id: 'chat', label: '聊天' })
     return panels
-  }, [status, recordings.length, fileSharingAvailable])
+  }, [status, recordings.length, fileSharingAvailable, agendaAvailable])
 
   /** Host only: lock or unlock the room to newcomers (server re-validates). */
   const toggleLock = useCallback(() => {
@@ -801,6 +911,25 @@ export default function App() {
                 locked={roomState.locked}
                 canKick={isHost}
                 onKick={kickPeer}
+              />
+            </div>
+          )}
+          {status === 'in-room' && agendaAvailable && (
+            <div className="sidebar__panel" data-panel="todos">
+              <TodoPanel
+                todos={todos}
+                onAdd={addTodo}
+                onToggle={toggleTodo}
+                onDelete={deleteTodo}
+              />
+            </div>
+          )}
+          {status === 'in-room' && agendaAvailable && (
+            <div className="sidebar__panel" data-panel="calendar">
+              <CalendarPanel
+                events={calendar}
+                onAdd={addCalendarEvent}
+                onDelete={deleteCalendarEvent}
               />
             </div>
           )}

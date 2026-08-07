@@ -47,10 +47,22 @@
 
 驗證:`mvn test`、`frontend npm test`、`tests/e2e run.sh`(base / recording / oidc)、`tests/ui run.sh`。
 
-**F. 需要真實環境才能推進(部署層,非程式碼缺口)**
+**F. 共用待辦與共用行事曆** ✅ 已完成:`agenda/`(V9:`todos`、`calendar_events`)+ `TodoController` / `CalendarController`。
+
+**架構決定:走 Postgres,不走 Yjs。** 筆記與白板是 CRDT,因為那是自由文字與圖形的並行編輯;待辦與行事曆是**結構化業務紀錄**——有負責人、期限、完成時間,會被查詢、被稽核,而且活得比這場會議久。藍圖原則本來就是「Durable 進 Postgres」;CRDT 查不了、驗不了、進不了事件骨幹。代價是同欄位並行編輯沒 CRDT 優雅,但待辦標題是短欄位不是文件,聊天早就是同一個模式。
+
+- **排序是伺服器的**:未完成優先、期限近的在前、沒期限的最後(`NULLS LAST`——Postgres 對 DESC 的預設剛好相反);行事曆從 `from`(預設 now)往前讀。前端只渲染不重排:兩個 client 各自排序,就會對「第一件事」講不同的東西。
+- **完成是事實不是旗標**:記時間與人;重複完成是 no-op,第二次點擊不會改寫是誰做完的;只有真正的狀態轉換才發事件(否則骨幹會被重複點擊灌滿)。
+- **權限分層**:新增與勾選人人可做(只有主持人能勾的清單不叫共用),刪除限主持人。`web/RoomAuthorization` 把 `caller()` 與 `requireHostIfKnown()` 收成一份,錄影與檔案兩個 controller 一起改用——**授權必須跑在查詢之前**,否則 404 會洩漏存在與否。
+- 變更經 `broadcastToRoom` 發 `agenda` 訊息帶 `{kind}`,只有受影響的清單重抓。納入保留期(`RETENTION_AGENDA_DAYS`,待辦與行事曆共用一個期限——留著任務卻讓它所屬的會議消失,會變成一份沒人放得回脈絡的清單)。
+- 順帶補上前一輪留下的測試缺口:`retention` e2e 現在也涵蓋共享檔案與 agenda 兩張表。
+
+驗證:`mvn test`、`frontend npm test`(TodoPanel / CalendarPanel 含逾期判定、時區轉換、分組不重排)、`tests/e2e/run.sh agenda`、`tests/ui/run.sh agenda`(兩個瀏覽器:一方新增另一方**不用重整**就看到、排序一致、勾選後沉到底)。
+
+**G. 需要真實環境才能推進(部署層,非程式碼缺口)**
 真實 IdP(Keycloak/Entra)對接演練、Slack/PagerDuty 告警接收端、TURN/TLS 443 真憑證、跨區域備份複寫與 KMS、目標環境的藍圖級工作負載(20k 連線)。
 
-**G. 等規模需求出現再做**
+**H. 等規模需求出現再做**
 Redis Cluster(資料分片;可用性已由 Sentinel 覆蓋)、OpenSearch 取代 Postgres FTS、部門/專案層級 ACL(需組織目錄整合)。
 
 ## 原則(照藍圖)
