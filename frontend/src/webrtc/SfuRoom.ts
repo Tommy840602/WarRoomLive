@@ -140,7 +140,18 @@ export class SfuRoom implements MediaRoom {
 
 /** Media-plane bootstrap served by the backend. */
 export interface MediaConfig {
+  /** What THIS room is on right now. Changes are announced in `room-state`. */
   mode: 'sfu' | 'mesh'
+  /**
+   * Whether an SFU is deployed at all, which is a different question.
+   *
+   * Without it the UI cannot tell "a small room, on the mesh by design" from
+   * "no SFU here, so this room is on its own past the limit" — and only the
+   * second one is worth warning anybody about.
+   */
+  sfuAvailable?: boolean
+  /** Participants past which a room moves to the SFU. */
+  meshMaxPeers?: number
   livekitUrl: string
   /** STUN/TURN servers for mesh-mode RTCPeerConnections (TURN when configured). */
   iceServers?: RTCIceServer[]
@@ -149,10 +160,23 @@ export interface MediaConfig {
 const authHeaders = (token?: string | null): HeadersInit =>
   token ? { Authorization: `Bearer ${token}` } : {}
 
-/** Asks the backend which media transport to use; absent/legacy backends mean mesh. */
-export async function fetchMediaConfig(token?: string | null): Promise<MediaConfig> {
+/**
+ * Asks the backend which media transport this room is on.
+ *
+ * Room-scoped, because the answer is: a room that has already outgrown the mesh
+ * puts its next joiner straight onto the SFU rather than having them negotiate a
+ * mesh they are about to be moved off.
+ *
+ * Absent or legacy backends mean mesh, which is also what an unreachable one
+ * means — it is the mode that needs nothing beyond the browser.
+ */
+export async function fetchMediaConfig(
+  token?: string | null,
+  room?: string,
+): Promise<MediaConfig> {
   try {
-    const res = await fetch('/api/media/config', { headers: authHeaders(token) })
+    const query = room ? `?room=${encodeURIComponent(room)}` : ''
+    const res = await fetch(`/api/media/config${query}`, { headers: authHeaders(token) })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return (await res.json()) as MediaConfig
   } catch {

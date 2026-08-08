@@ -81,6 +81,7 @@ export function toItem(row: Todo | CalendarEvent): AgendaItem {
     id: row.id,
     text: row.title,
     note: row.description || undefined,
+    assignee: row.assignee,
     at: row.startsAt,
     endsAt: row.endsAt,
     done: row.done ?? false,

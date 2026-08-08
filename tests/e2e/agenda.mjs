@@ -135,6 +135,36 @@ ok(calendarNotice.payload?.kind === 'calendar',
   'and so is a calendar change, named separately so only that list refetches')
 watcher.close()
 
+// --- An appointment belongs to somebody -----------------------------------
+//
+// The capture line has always parsed `@名字`, but a line that also named a time
+// range routes here rather than to the to-do list — and this table had no owner
+// column, so the person was shown in the preview and then dropped. The parser's
+// invariant is that nothing it lifts out is lost; it held inside the parser and
+// broke one layer above it.
+
+const owned = await json(await api('POST', `/api/calendar/${ROOM}`, {
+  title: '與法務對齊', startsAt: iso(20 * hour), endsAt: iso(21 * hour), assignee: 'bob',
+}))
+ok(owned.assignee === 'bob', `an appointment keeps its owner (${owned.assignee})`)
+
+const reread = (await json(await fetch(`${ORIGIN}/api/calendar/${ROOM}?from=${encodeURIComponent(iso(-hour))}`)))
+  .find((e) => e.id === owned.id)
+ok(reread.assignee === 'bob', 'and still has it when read back')
+
+const reassigned = await json(await api('PATCH', `/api/calendar/${ROOM}/${owned.id}`, { assignee: '小明' }))
+ok(reassigned.assignee === '小明', 'the owner can be changed')
+
+const unowned = await json(await api('PATCH', `/api/calendar/${ROOM}/${owned.id}`, { assignee: '  ' }))
+ok(unowned.assignee === undefined,
+  'and cleared — blank means nobody, not an owner whose name is empty')
+
+// An untouched owner survives a PATCH about something else.
+await api('PATCH', `/api/calendar/${ROOM}/${owned.id}`, { assignee: 'bob' })
+const retitled = await json(await api('PATCH', `/api/calendar/${ROOM}/${owned.id}`, { title: '改名了' }))
+ok(retitled.assignee === 'bob' && retitled.title === '改名了',
+  'a partial update leaves the owner alone')
+
 // --- Triage ---------------------------------------------------------------
 //
 // The dashboard's three bands. What matters here is the *storage* rule: NOW and

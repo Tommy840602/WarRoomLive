@@ -34,6 +34,8 @@ public class LocalBackplane implements Backplane {
     private static final class RoomRecord {
         final LinkedHashMap<String, MemberInfo> members = new LinkedHashMap<>();
         boolean locked;
+        /** One-way: set when the room outgrows the mesh, cleared only by the room ending. */
+        boolean sfu;
 
         String host() {
             return members.isEmpty() ? null : members.keySet().iterator().next();
@@ -62,7 +64,7 @@ public class LocalBackplane implements Backplane {
     public RoomState roomState(String room) {
         AtomicReference<RoomState> state = new AtomicReference<>(RoomState.EMPTY);
         directory.computeIfPresent(room, (r, record) -> {
-            state.set(new RoomState(record.host(), record.locked));
+            state.set(new RoomState(record.host(), record.locked, record.sfu));
             return record;
         });
         return state.get();
@@ -72,6 +74,14 @@ public class LocalBackplane implements Backplane {
     public void setLocked(String room, boolean locked) {
         directory.computeIfPresent(room, (r, record) -> {
             record.locked = locked;
+            return record;
+        });
+    }
+
+    @Override
+    public void markSfu(String room) {
+        directory.computeIfPresent(room, (r, record) -> {
+            record.sfu = true;
             return record;
         });
     }

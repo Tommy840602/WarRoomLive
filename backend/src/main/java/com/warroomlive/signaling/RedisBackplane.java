@@ -124,7 +124,7 @@ public class RedisBackplane implements Backplane, org.springframework.context.Sm
         return "warroom:room:" + room;
     }
 
-    /** Room meta hash: fields {@code host} and {@code locked}; lives with the room. */
+    /** Room meta hash: fields {@code host}, {@code locked} and {@code sfu}; lives with the room. */
     private static String metaKey(String room) {
         return "warroom:roommeta:" + room;
     }
@@ -235,7 +235,15 @@ public class RedisBackplane implements Backplane, org.springframework.context.Sm
             return RoomState.EMPTY;
         }
         Object host = meta.get("host");
-        return new RoomState(host == null ? null : host.toString(), "1".equals(meta.get("locked")));
+        return new RoomState(host == null ? null : host.toString(),
+                "1".equals(meta.get("locked")), "1".equals(meta.get("sfu")));
+    }
+
+    @Override
+    public void markSfu(String room) {
+        // A plain HSET rather than part of the register script: the field only
+        // ever goes from unset to 1, so two nodes racing to set it agree.
+        redis.opsForHash().put(metaKey(room), "sfu", "1");
     }
 
     @Override

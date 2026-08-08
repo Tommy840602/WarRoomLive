@@ -22,6 +22,8 @@ export type SignalType =
   | 'attachment'
   | 'agenda'
   | 'agenda-due'
+  | 'caption'
+  | 'caption-translated'
   | 'room-full'
   | 'room-locked'
   | 'error'
@@ -46,6 +48,17 @@ export interface MediaState {
 export interface RoomStateInfo {
   host: string
   locked: boolean
+  /**
+   * Which media transport the room is on.
+   *
+   * Here rather than in a message type of its own: it is a property of the room
+   * that every joiner needs and that everybody must be told about when it
+   * changes, which is exactly what this message is for. A room starts on the
+   * mesh and is moved to `sfu` once it grows past the mesh limit — the switch is
+   * one-way for the life of the room, so this never goes back to `mesh` while
+   * anybody is still in it.
+   */
+  mediaMode?: 'mesh' | 'sfu'
 }
 
 /**
@@ -92,6 +105,8 @@ export interface CalendarEvent {
   description: string
   startsAt: string
   endsAt?: string
+  /** Free text, like a to-do's: an appointment can belong to somebody. */
+  assignee?: string
   createdBy: string
   createdAt: string
   /** Entries can be marked dealt with, exactly as to-do items can. */
@@ -129,6 +144,58 @@ export interface Meeting {
   durationSeconds?: number
   /** Present and true while the room is still occupied — the duration is not a fact yet. */
   live?: boolean
+}
+
+/**
+ * Payload of a `caption` message: one line of live subtitle.
+ *
+ * `final` splits the two lives of this message. An interim is recognition's
+ * running guess, sent several times a second and relayed only. A final is the
+ * settled sentence: the server records it and sends it back stamped with `id`,
+ * which is what a later `caption-translated` is keyed by.
+ */
+export interface CaptionPayload {
+  /** Server-assigned once the line is durable; absent on an interim. */
+  id?: number
+  text: string
+  /** BCP-47 as the recognizer reported it, e.g. `cmn-Hant-TW`. */
+  lang: string
+  final: boolean
+  /** The server's word on who said it; absent on the way in. */
+  speaker?: string
+  /** The speaker's clock, in epoch milliseconds. */
+  spokenAt?: number
+}
+
+/** Payload of a `caption-translated` message: a translation catching up. */
+export interface CaptionTranslatedPayload {
+  id: number
+  translation: string
+  translationLang: string
+}
+
+/** One recorded line of a room's transcript, as `GET /api/captions/{room}` returns it. */
+export interface TranscriptLine {
+  id: number
+  speaker: string
+  peerId: string
+  lang: string
+  text: string
+  /** ISO-8601 instant. */
+  spokenAt: string
+  translation?: string
+  translationLang?: string
+}
+
+/** What `GET /api/captions/config` says this deployment can do. */
+export interface CaptionConfig {
+  /** Whether final lines are kept — needs a database. */
+  recording: boolean
+  /** Whether they are translated — needs a language model. */
+  translation: boolean
+  /** Whether meeting summaries can be produced — needs the same model. */
+  summary: boolean
+  languages: { track: 'zh' | 'en'; label: string; recognition: string }[]
 }
 
 /** Payload of an `agenda-due` message: this specific thing's time has arrived. */

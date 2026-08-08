@@ -110,6 +110,37 @@ const stamps = await agenda(alice).locator('.row .chip--stamp').allInnerTexts()
 ok(stamps.length === 1 && stamps[0] === '約會',
   `only the line that named a span became an appointment (${stamps.join('/')})`)
 
+// --- @ suggests the room. Only a browser has a caret, which is what decides
+//     whether the picker is open and what it is filtering on.
+const capture_ = agenda(alice).locator('.capture__line')
+await capture_.click()
+await capture_.type('回報進度 @')
+await agenda(alice).locator('[role="listbox"]').waitFor({ state: 'visible', timeout: 5000 })
+// innerText puts a newline between the decorative @ and the name, which makes
+// a failure message unreadable if it is not flattened.
+const offered = (await agenda(alice).locator('[role="option"]').allInnerTexts())
+  .map((o) => o.replace(/\s+/g, ''))
+ok(offered.some((o) => o.includes('Bob')),
+  `typing @ offers the people in the room (${offered.join(' ')})`)
+
+await capture_.press('ArrowDown')
+await capture_.press('Enter')
+const afterPick = await capture_.inputValue()
+ok(/@\S+\s$/.test(afterPick), `picking one completes the mention (${afterPick})`)
+ok(!(await agenda(alice).locator('[role="listbox"]').isVisible()),
+  'and closes the list')
+
+// The field is a suggestion, not a whitelist: somebody outside the room is
+// still a valid owner.
+await capture_.fill('')
+await capture_.type('聯絡外包 @外包廠商')
+await capture_.press('Escape')
+ok(!(await agenda(alice).locator('[role="listbox"]').isVisible()),
+  'Escape dismisses the list — a mention at the end of the line has nowhere to move to')
+ok((await capture_.inputValue()).includes('@外包廠商'),
+  'and leaves what was typed alone')
+await capture_.fill('')
+
 // --- The clock does the filing until somebody disagrees.
 ok((await bandOf(alice, '與法務對齊')) === '現在',
   'something happening in two hours is filed under 現在 by the clock')

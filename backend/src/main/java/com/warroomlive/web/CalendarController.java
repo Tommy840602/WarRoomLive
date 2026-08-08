@@ -58,7 +58,8 @@ public class CalendarController {
         this.mapper = mapper;
     }
 
-    public record CreateRequest(String title, String description, String startsAt, String endsAt) {
+    public record CreateRequest(String title, String description, String startsAt, String endsAt,
+            String assignee) {
     }
 
     /**
@@ -68,7 +69,7 @@ public class CalendarController {
      * {@code "auto"} — see {@link #applyTriage}.
      */
     public record UpdateRequest(String title, String description, String startsAt, String endsAt,
-            Boolean done, String triage) {
+            String assignee, Boolean done, String triage) {
     }
 
     @GetMapping("/{room}")
@@ -96,7 +97,7 @@ public class CalendarController {
 
         CalendarEventEntity saved = store().create(room, title,
                 bounded(request.description(), MAX_DESCRIPTION, "description"),
-                startsAt, endsAt, authorization.caller());
+                startsAt, endsAt, trimToNull(request.assignee()), authorization.caller());
         announce(room);
         return describe(saved);
     }
@@ -123,13 +124,17 @@ public class CalendarController {
         }
         Instant endsAt = request.endsAt() == null
                 ? current.getEndsAt() : TodoController.parseInstant(request.endsAt(), "endsAt");
+        String assignee = request.assignee() == null
+                ? current.getAssignee() : trimToNull(request.assignee());
         requireOrder(startsAt, endsAt);
 
         CalendarEventEntity updated = current;
         if (request.title() != null || request.description() != null
-                || request.startsAt() != null || request.endsAt() != null) {
+                || request.startsAt() != null || request.endsAt() != null
+                || request.assignee() != null) {
             updated = store()
-                    .edit(room, id, title, description, startsAt, endsAt, authorization.caller())
+                    .edit(room, id, title, description, startsAt, endsAt, assignee,
+                            authorization.caller())
                     .orElse(current);
         }
         updated = applyTriage(room, id, request.done(), request.triage(), triage, updated);
@@ -190,6 +195,15 @@ public class CalendarController {
         }
     }
 
+    /** Blank means "nobody", not an owner whose name is the empty string. */
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private static String require(String value, int max, String field) {
         String trimmed = value == null ? "" : value.trim();
         if (trimmed.isEmpty()) {
@@ -226,6 +240,9 @@ public class CalendarController {
         out.put("createdBy", event.getCreatedBy());
         out.put("createdAt", event.getCreatedAt().toString());
         out.put("done", event.isDone());
+        if (event.getAssignee() != null) {
+            out.put("assignee", event.getAssignee());
+        }
         if (event.getEndsAt() != null) {
             out.put("endsAt", event.getEndsAt().toString());
         }

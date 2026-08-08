@@ -3,6 +3,8 @@ package com.warroomlive.retention;
 import com.warroomlive.agenda.CalendarEventEntity;
 import com.warroomlive.meetings.MeetingEntity;
 import com.warroomlive.meetings.MeetingStore;
+import com.warroomlive.transcript.TranscriptLineEntity;
+import com.warroomlive.transcript.TranscriptStore;
 import com.warroomlive.agenda.CalendarStore;
 import com.warroomlive.agenda.TodoEntity;
 import com.warroomlive.agenda.TodoStore;
@@ -65,6 +67,7 @@ public class RetentionService {
     private final TodoStore todos;
     private final CalendarStore calendar;
     private final MeetingStore meetings;
+    private final TranscriptStore transcripts;
     private final TransactionTemplate tx;
     private final MeterRegistry metrics;
 
@@ -75,6 +78,7 @@ public class RetentionService {
     private final Duration attachmentRetention;
     private final Duration agendaRetention;
     private final Duration meetingRetention;
+    private final Duration transcriptRetention;
 
     public RetentionService(
             EntityManager entityManager,
@@ -83,6 +87,7 @@ public class RetentionService {
             TodoStore todos,
             CalendarStore calendar,
             MeetingStore meetings,
+            TranscriptStore transcripts,
             TransactionTemplate tx,
             MeterRegistry metrics,
             @Value("${warroomlive.retention.recordings-days:0}") int recordingDays,
@@ -91,13 +96,15 @@ public class RetentionService {
             @Value("${warroomlive.retention.published-events-days:0}") int publishedEventDays,
             @Value("${warroomlive.retention.attachments-days:0}") int attachmentDays,
             @Value("${warroomlive.retention.agenda-days:0}") int agendaDays,
-            @Value("${warroomlive.retention.meetings-days:0}") int meetingDays) {
+            @Value("${warroomlive.retention.meetings-days:0}") int meetingDays,
+            @Value("${warroomlive.retention.transcripts-days:0}") int transcriptDays) {
         this.entityManager = entityManager;
         this.recordings = recordings;
         this.attachments = attachments;
         this.todos = todos;
         this.calendar = calendar;
         this.meetings = meetings;
+        this.transcripts = transcripts;
         this.tx = tx;
         this.metrics = metrics;
         this.recordingRetention = Duration.ofDays(recordingDays);
@@ -107,6 +114,7 @@ public class RetentionService {
         this.attachmentRetention = Duration.ofDays(attachmentDays);
         this.agendaRetention = Duration.ofDays(agendaDays);
         this.meetingRetention = Duration.ofDays(meetingDays);
+        this.transcriptRetention = Duration.ofDays(transcriptDays);
     }
 
     /**
@@ -121,6 +129,7 @@ public class RetentionService {
             purgeRecordings();
             purgeAttachments();
             purgeAgenda();
+            purgeTranscripts();
             purgeMeetings();
             purgeChat();
             purgeAudit();
@@ -227,6 +236,32 @@ public class RetentionService {
             removed += expired.size();
         }
         report("agenda", removed, agendaRetention);
+        return removed;
+    }
+
+    /**
+     * What was said out loud.
+     *
+     * <p>Its own period, and swept <em>before</em> the meetings it belongs to.
+     * The summary rows go with their meeting by foreign key, so a shorter
+     * transcript period is exactly the arrangement most deployments want: keep
+     * the four bullets of what was decided, stop keeping the words.
+     */
+    int purgeTranscripts() {
+        if (transcriptRetention.isZero()) {
+            return 0;
+        }
+        Instant cutoff = Instant.now().minus(transcriptRetention);
+        int removed = 0;
+        for (int pass = 0; pass < MAX_BATCHES; pass++) {
+            List<TranscriptLineEntity> expired = transcripts.expiredBefore(cutoff, BATCH);
+            if (expired.isEmpty()) {
+                break;
+            }
+            transcripts.deleteAll(expired);
+            removed += expired.size();
+        }
+        report("transcripts", removed, transcriptRetention);
         return removed;
     }
 

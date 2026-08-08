@@ -31,18 +31,18 @@ public class CalendarStore {
 
     @Transactional
     public CalendarEventEntity create(String room, String title, String description,
-            Instant startsAt, Instant endsAt, String actor) {
+            Instant startsAt, Instant endsAt, String assignee, String actor) {
         CalendarEventEntity saved = repository.save(
-                new CalendarEventEntity(room, title, description, startsAt, endsAt, actor));
+                new CalendarEventEntity(room, title, description, startsAt, endsAt, assignee, actor));
         record("calendar.event.created", saved, actor);
         return saved;
     }
 
     @Transactional
     public Optional<CalendarEventEntity> edit(String room, long id, String title, String description,
-            Instant startsAt, Instant endsAt, String actor) {
+            Instant startsAt, Instant endsAt, String assignee, String actor) {
         return find(room, id).map(event -> {
-            event.edit(title, description, startsAt, endsAt);
+            event.edit(title, description, startsAt, endsAt, assignee);
             repository.save(event);
             record("calendar.event.updated", event, actor);
             return event;
