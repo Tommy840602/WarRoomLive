@@ -21,7 +21,13 @@ services:
 
   backend:
     environment:
-      SPRING_PROFILES_ACTIVE: postgres,oidc
+      # Every overlay that touches profiles reads the same variable, so stacking
+      # them adds up instead of overwriting. A scalar env value is REPLACED by a
+      # later -f, not merged: `-f oidc -f ai` used to leave `postgres,ai`, which
+      # silently turned authentication off while devidp still ran and the
+      # frontend still showed a login screen. stack.sh computes the union; the
+      # default keeps this overlay working on its own.
+      SPRING_PROFILES_ACTIVE: ${WARROOM_PROFILES:-postgres,oidc}
       OIDC_ISSUER: ${PUBLIC_ORIGIN:-http://localhost:8088}/auth
       OIDC_JWK_SET_URI: http://devidp:8089/auth/jwks
       OIDC_CLIENT_ID: warroomlive-web

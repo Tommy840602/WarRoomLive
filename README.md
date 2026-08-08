@@ -74,6 +74,23 @@ docker compose up --build
 
 > 前端使用相對路徑與 `window.location.host` 組出 WebSocket URL,因此不論部署在哪個網域/埠都不需改設定。
 
+## 把疊加層混在一起
+
+每個疊加層都可以單獨用,也可以疊起來。`stack.sh` 負責記住怎麼疊:
+
+```bash
+./stack.sh up oidc ai events              # 三個功能一起
+./stack.sh up recording observability     # recording 會自動帶上 sfu
+./stack.sh up all                         # 所有能共存的
+./stack.sh up oidc ai -- -d --build       # `--` 之後原樣傳給 docker compose
+```
+
+它做三件事:補上前置疊加層(recording→sfu、ha→scale、backup-s3→backup)、決定 `-f` 的順序(後面的檔案在同一個 key 上會蓋掉前面的,所以順序是**意圖**),以及算出 Spring profile 的**聯集**。
+
+最後那件事是它存在的原因。**scalar 的環境變數會被後面的 `-f` 取代,而不是合併** —— 而有六個疊加層各自設 `SPRING_PROFILES_ACTIVE`。`-f oidc -f ai` 留下的是 `postgres,ai`:後端退回 permit-all 的安全鏈,而 devidp 照常在跑、前端照常顯示登入畫面。**一個看起來有驗證、實際上完全開放的房間**,是這個系統能產生的最糟糕的失敗。每一支測試都過,因為每一支都只跑一個疊加層。
+
+`tests/compose/run.sh` 現在專門檢查組合出來的結果(只用 `docker compose config`,不需要 image、網路或資料庫),而且是唯一能在 CI 跑的 stack 級測試。
+
 ## SFU 模式(選用疊加層):超過 8 人自動切換
 
 預設媒體走瀏覽器間 full mesh。掛上 SFU 疊加層後,**房間超過 8 人就自動改走 LiveKit**:每人只上傳一份,由 SFU 扇出,上行頻寬不再隨人數增長。

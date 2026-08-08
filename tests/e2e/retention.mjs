@@ -39,12 +39,21 @@ psql(`INSERT INTO audit_log (event_id, event_type, aggregate_type, aggregate_id,
   + `(gen_random_uuid(), 'chat.message.created', 'room', '${ROOM}', 1, '{}'::jsonb, now() - interval '30 days'), `
   + `(gen_random_uuid(), 'chat.message.created', 'room', '${ROOM}', 1, '{}'::jsonb, now())`)
 
+// Built in SQL rather than as a JSON literal: the seed travels through
+// `docker compose exec -T db psql -c "..."`, and JSON's double quotes would
+// close that shell string. jsonb_build_object needs only single quotes.
+const PAYLOAD = "jsonb_build_object('fromId','seed','name','Seed','text','retention seed','ts',1)" 
+
 // --- Outbox: only PUBLISHED rows are eligible. An old unpublished row is not
 // stale history, it is the queue — deleting it would silently lose an event.
 psql(`INSERT INTO outbox_events (event_id, event_type, aggregate_type, aggregate_id, payload, occurred_at, published_at) VALUES `
-  + `(gen_random_uuid(), 'chat.message.created', 'room', '${ROOM}', '{}'::jsonb, now() - interval '30 days', now() - interval '30 days'), `
-  + `(gen_random_uuid(), 'chat.message.created', 'room', '${ROOM}', '{}'::jsonb, now() - interval '30 days', NULL), `
-  + `(gen_random_uuid(), 'chat.message.created', 'room', '${ROOM}', '{}'::jsonb, now(), now())`)
+  // Shaped like a real chat event, not `{}`. The unpublished row below IS the
+  // queue, so with the events overlay also running the publisher ships it for
+  // real — and an empty payload then reached the indexer as an event it could
+  // not project. A suite must not manufacture poison for a service it shares.
+  + `(gen_random_uuid(), 'chat.message.created', 'room', '${ROOM}', ${PAYLOAD}, now() - interval '30 days', now() - interval '30 days'), `
+  + `(gen_random_uuid(), 'chat.message.created', 'room', '${ROOM}', ${PAYLOAD}, now() - interval '30 days', NULL), `
+  + `(gen_random_uuid(), 'chat.message.created', 'room', '${ROOM}', ${PAYLOAD}, now(), now())`)
 
 // --- The to-do list and the calendar, on both sides of the cutoff.
 psql(`INSERT INTO todos (room, text, created_by, created_at) VALUES `
@@ -84,9 +93,17 @@ if (hasObjects) {
 }
 
 const count = (sql) => Number(psql(sql))
+// Scoped to the rows THIS suite seeded (`from_id = 'u'`, empty audit payload).
+// With the events overlay also running, the backend publishes the unpublished
+// outbox row seeded below and the indexer projects it into these same tables for
+// this same room — so counting everything in the room made the suite fail on a
+// combined stack for a reason that had nothing to do with retention. A suite
+// must not assume it is the only thing writing to the database.
 const chatRows = () => count(`SELECT count(*) FROM chat_message WHERE room = '${ROOM}'`)
-const searchRows = () => count(`SELECT count(*) FROM message_search WHERE room = '${ROOM}'`)
-const auditRows = () => count(`SELECT count(*) FROM audit_log WHERE aggregate_id = '${ROOM}'`)
+const searchRows = () =>
+  count(`SELECT count(*) FROM message_search WHERE room = '${ROOM}' AND from_id = 'u'`)
+const auditRows = () =>
+  count(`SELECT count(*) FROM audit_log WHERE aggregate_id = '${ROOM}' AND payload = '{}'::jsonb`)
 const outboxRows = (where) =>
   count(`SELECT count(*) FROM outbox_events WHERE aggregate_id = '${ROOM}'${where}`)
 const recordingRows = () => count(`SELECT count(*) FROM recordings WHERE room = '${ROOM}'`)
@@ -121,11 +138,22 @@ try {
   await until('the old audit entry is removed', () => auditRows() === 1, 30_000, 1000)
   ok(true, 'the old audit entry is removed, the recent one is not')
 
-  await until('the old published outbox row is removed',
-    () => outboxRows(" AND published_at IS NOT NULL") === 1, 30_000, 1000)
-  ok(true, 'the old published outbox row is removed, the recent one is not')
-  ok(outboxRows(' AND published_at IS NULL') === 1,
-    'an old UNPUBLISHED outbox row survives — it is the queue, not history')
+  // These two need the outbox publisher to be ABSENT, and say so rather than
+  // failing. The premise is "an unpublished row is the queue, not history" —
+  // but on a stack that also runs the events overlay the publisher does exactly
+  // its job and publishes the seeded row within a second, so there is no
+  // unpublished row left to make the point with. Nothing is broken in either
+  // direction; the assertion simply cannot be made while a publisher is live.
+  if (outboxRows(' AND published_at IS NULL') === 0) {
+    console.log('   (the events overlay is running and published the seeded row —'
+      + ' unpublished-row retention not exercised)')
+  } else {
+    await until('the old published outbox row is removed',
+      () => outboxRows(" AND published_at IS NOT NULL") === 1, 30_000, 1000)
+    ok(true, 'the old published outbox row is removed, the recent one is not')
+    ok(outboxRows(' AND published_at IS NULL') === 1,
+      'an old UNPUBLISHED outbox row survives — it is the queue, not history')
+  }
 
   await until('the old to-do is removed', () => todoRows() === 1, 30_000, 1000)
   ok(psql(`SELECT text FROM todos WHERE room = '${ROOM}'`) === 'fresh task',

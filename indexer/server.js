@@ -144,8 +144,13 @@ async function index(envelope) {
       mDeduped.inc()
       return
     }
-    if (envelope.eventType === 'chat.message.created') {
-      const p = envelope.payload
+    // Searchable only if there is something to search. The envelope schema does
+    // not constrain payload shape, so a `chat.message.created` can arrive
+    // carrying nothing — and projecting that hit message_search's NOT NULL
+    // columns, failed the transaction, and took the audit row down with it. The
+    // event still happened; it simply has no text in it.
+    const p = envelope.payload ?? {}
+    if (envelope.eventType === 'chat.message.created' && p.fromId && p.text) {
       // 'simple' keeps tokens language-neutral; the backend search also does an
       // ILIKE fallback so CJK text without spaces still matches.
       await client.query(
@@ -201,7 +206,30 @@ await consumer.run({
     }
     // DB errors propagate: kafkajs retries without committing the offset, so
     // transient failures re-deliver instead of silently losing projections.
-    await index(envelope)
+    //
+    // Except the ones that can never succeed. An integrity-constraint violation
+    // (SQLSTATE class 23) says the DATA is wrong, not that the database is
+    // busy: retrying it produces the same violation for ever, the offset is
+    // never committed, and one malformed event stops all auditing and search
+    // indefinitely. That is not hypothetical — it is what happened the first
+    // time the events and retention overlays ran against the same stack.
+    //
+    // So class 23 joins the poison bucket the envelope checks already use;
+    // everything else (connection lost, deadlock, out of resources) still
+    // retries, because those really do get better on their own.
+    try {
+      await index(envelope)
+    } catch (err) {
+      if (typeof err?.code === 'string' && err.code.startsWith('23')) {
+        mFailed.inc()
+        console.warn(
+          `indexer: dropping unindexable event ${envelope.eventId}`,
+          `(${envelope.eventType}): ${err.message}`,
+        )
+        return
+      }
+      throw err
+    }
   },
 })
 console.log(`indexer consuming ${topic} (group ${groupId}) from ${brokers.join(',')}`)
