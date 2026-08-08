@@ -3,11 +3,63 @@
 // against a service port directly — so the proxy routing is part of what is
 // being tested. Override with E2E_ORIGIN when the stack is published elsewhere.
 import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 export const ORIGIN = process.env.E2E_ORIGIN ?? 'http://localhost:8088'
 export const WS_ORIGIN = ORIGIN.replace(/^http/, 'ws')
 export const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
+
+// --- Authentication, once, for every suite ------------------------------
+//
+// Each overlay used to be exercised on its own, so a suite could assume the
+// stack it was written for. That stops being true the moment overlays are
+// combined: with the oidc overlay in the mix EVERY socket handshake and every
+// /api call needs a bearer, and a suite that does not carry one fails in a way
+// that looks like the feature is broken rather than like the suite is
+// unauthenticated.
+//
+// So the harness logs in if — and only if — the running stack says it wants
+// authentication, and everything below carries the token by default.
+const rawFetch = globalThis.fetch.bind(globalThis)
+
+async function login() {
+  try {
+    const config = await rawFetch(`${ORIGIN}/api/auth/config`)
+    if (!config.ok) return null
+    const { enabled } = await config.json()
+    if (!enabled) return null
+    // The dev IdP's password grant, the same one the oidc suite uses; a real
+    // provider would need its own flow, which is why this is best-effort.
+    const res = await rawFetch(`${ORIGIN}/auth/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=password&username=alice&password=alice123&client_id=warroomlive-web',
+    })
+    if (!res.ok) return null
+    return (await res.json()).access_token ?? null
+  } catch {
+    return null
+  }
+}
+
+/** The ambient token: a string under the oidc overlay, null without it. */
+export const AUTH_TOKEN = await login()
+
+// Only `/api` requests, and only when the caller has not set its own header.
+// `/auth/*` is the IdP itself, and a presigned `/objects/*` URL carries its
+// signature in the query — adding a bearer to either would change what is being
+// tested. Callers that pass their own Authorization (the oidc suite asserting
+// what Bob may not read) are left exactly as they are.
+globalThis.fetch = (input, init = {}) => {
+  const url = typeof input === 'string' ? input : input?.url ?? ''
+  const headers = new Headers(init.headers ?? {})
+  if (AUTH_TOKEN && url.startsWith(`${ORIGIN}/api/`) && !headers.has('authorization')) {
+    headers.set('authorization', `Bearer ${AUTH_TOKEN}`)
+    return rawFetch(input, { ...init, headers })
+  }
+  return rawFetch(input, init)
+}
 
 /** Unique per run so suites can be re-run against a stack that keeps its data. */
 export const RUN_ID = process.argv[2] ?? String(Date.now())
@@ -43,10 +95,40 @@ export async function until(label, pred, ms = 10000, step = 100) {
 // --- docker helpers -------------------------------------------------------
 // Paths are resolved from the repo root, so suites run from any cwd.
 
-/** `docker compose` with the base file plus the named overlays. */
+/**
+ * `docker compose` for the stack that is actually running.
+ *
+ * <p>This used to be "the base file plus whatever overlays the caller names",
+ * which is a different and NARROWER view of the project whenever the stack was
+ * started with more of them. That matters because these commands are not all
+ * read-only: `docker compose run` reconciles services against the config it is
+ * given, so a suite invoking it with base-only silently recreated collab and
+ * the backend without their overlay environment — and everything downstream of
+ * that env stopped working for the rest of the session, with nothing logged.
+ *
+ * <p>So when `stack.sh up` has recorded what it started, that wins. The named
+ * overlays remain the fallback for a stack brought up by hand.
+ */
 export function compose(...overlays) {
+  const recorded = readStackFiles()
+  if (recorded) return `docker compose ${recorded}`
   const files = ['docker-compose.yml', ...overlays.map((o) => `docker-compose.${o}.yml`)]
   return `docker compose ${files.map((f) => `-f ${REPO_ROOT}${f}`).join(' ')}`
+}
+
+/** The `-f` flags `stack.sh up` recorded, absolute-path'd, or null. */
+function readStackFiles() {
+  try {
+    const raw = readFileSync(`${REPO_ROOT}.stack.env`, 'utf8')
+    const match = raw.match(/WARROOM_COMPOSE_FILES='([^']*)'/)
+    if (!match) return null
+    return match[1]
+      .split(/\s+/)
+      .map((part) => (part === '-f' ? part : `${REPO_ROOT}${part}`))
+      .join(' ')
+  } catch {
+    return null
+  }
 }
 
 export const sh = (cmd, opts) => execSync(cmd, opts).toString().trim()
@@ -75,7 +157,10 @@ export function logMatches(container, pattern) {
  * One signaling connection with an awaitable, type-keyed inbox. Messages that
  * arrive before they are awaited are queued, so a suite never races the server.
  */
-export function signalClient(id, name = id, { token } = {}) {
+export function signalClient(id, name = id, opts = {}) {
+  // `'token' in opts` rather than a default value: passing an empty token on
+  // purpose means "connect anonymously", which is a thing the oidc suite tests.
+  const token = 'token' in opts ? opts.token : AUTH_TOKEN
   const url = `${WS_ORIGIN}/ws/signal${token ? `?access_token=${encodeURIComponent(token)}` : ''}`
   const ws = new WebSocket(url)
   const queue = []
@@ -188,7 +273,9 @@ export async function discoverRoomCap(probeRoom = 'cap-probe-' + RUN_ID) {
  * A Yjs client on the shared document plane. Imported lazily so suites that
  * only touch signaling do not need the Yjs dependencies loaded.
  */
-export async function collabClient(docName, { token, field = 'e2e', url } = {}) {
+export async function collabClient(docName, opts = {}) {
+  const { field = 'e2e', url } = opts
+  const token = 'token' in opts ? opts.token : AUTH_TOKEN
   const [Y, { HocuspocusProvider }] = await Promise.all([
     import('yjs'),
     import('@hocuspocus/provider'),

@@ -70,8 +70,20 @@
   cursor: not-allowed;
 }
 
+/* Its own ink, not the primary button's.
+   `.app__controls button` paints every button with `--accent-ink`, which is the
+   colour that sits ON the accent — near-black in dark, near-white in day. A
+   secondary button swapped the background for a surface and kept that ink, so
+   its label was dark-on-dark in the night skin and, in day, white text on a
+   white button: the emoji still rendered and the words did not. */
 .app__controls .btn-secondary {
   background: var(--surface-raised);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+}
+
+.app__controls .btn-secondary:hover:not(:disabled) {
+  background: var(--surface-hover);
 }
 
 .app__error {
@@ -2061,13 +2073,16 @@ body.is-resizing {
   grid-column: 2;
 }
 
-/* The language the reader did not ask for. Present, because a translation is
-   sometimes wrong and a room that can see the original can catch it — and
-   quieter, because it is not the one they are reading. */
+/* The translated row.
+   Same size and weight as the words that were said, on purpose. Marking the
+   translation smaller made the emphasis flip down the track: Chinese is always
+   on top, so a line spoken in Chinese read big-then-small and the next one,
+   spoken in English, read small-then-big. In a bilingual room both rows are
+   being read; what must not change line to line is where the eye goes.
+   Slightly quieter is enough to say which one the machine wrote. */
 .caption__alt {
   grid-column: 2;
-  font-size: 0.85rem;
-  color: #b9c0c8;
+  color: #c3cbd4;
 }
 
 .caption-control {

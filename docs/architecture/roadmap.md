@@ -119,6 +119,21 @@
 - **測試與截圖各抓到不同的東西**。測試抓到:摘要 idempotency 失敗,因為 Java `Instant` 有奈秒而 `timestamptz` 只有微秒,同一個欄位「剛建立」和「讀回來」長得不一樣;以及**側邊面板的顯示規則要把每個面板名字寫兩次**,新面板漏了那一行就會渲染進 DOM 卻永遠看不見(`.count()` 看得到、人看不到)——改成面板自己帶 `hidden`,順便就是 tabpanel 該有的 ARIA。截圖抓到:字幕控制項一加進去,整排按鈕就被壓到一個字一行(flex 會把按鈕縮到比裡面的詞還窄);以及字幕蓋住視訊格自己的名牌與表情列,而錨在 stage 底部又會掉到摺線以下——最後錨在**視訊區塊**底下。
 - 驗證:`mvn test` 58、`frontend npm test` 262、`tests/e2e` 11 支 122 項(captions 32)、`tests/ui` 8 支 109 項(captions 18)。
 
+**O. 兩個上線後回報的問題** ✅ 已完成:一個是隱形按鈕,一個是設計錯誤。
+
+- **看不到文字**:`.app__controls button` 把每顆按鈕都塗上 `--accent-ink` —— 那是**放在主色上**的墨色(夜近黑、日近白)。`.btn-secondary` 只換了背景沒換墨色,結果夜間是深字配深底(1.15:1)、日間是**白字配白底**(1.04:1):emoji 照常渲染,字整個消失。所有既有測試都過——按鈕存在、可點、label 正確、完全看不見。修掉之外,`tests/ui/layout` 加了一個**量實際畫出來的對比度**的檢查(WCAG 公式、AA 門檻 4.5:1、兩個 skin 都量),而且先在未修的 CSS 上驗證它會抓到:1.15/1.04 —— 跟離線算的一模一樣。
+- **中英文都要顯示,不用切換**:原本「讀者選的語言在上面」是個設計錯誤——它讓語言選單同時代表兩件不相干的事(我說什麼/我讀什麼),而且字幕的形狀取決於誰在看。改成**永遠兩行、固定中文在上**(`captions/lang.ts`,鏡射後端的 `Lang.java`;`cmn-Hant-TW` 歸中文,`startsWith("zh")` 會漏掉它)。「原文在上」也被否決:那會讓上下兩行在同一段對話裡隨說話語言互換。翻譯行同字級、只稍微安靜——兩行都在被讀,強調不能隨誰講話而翻面。逐字稿面板同一套順序。
+- 驗證:前端 269(lang.ts 純邏輯 7 支新測)、e2e 11 支照舊全過、瀏覽器 8 支(layout 25 含對比度、captions 21 含固定順序)。
+
+**P. 把疊加層混在一起** ✅ 已完成:每個疊加層都被單獨驗證過,組合起來則從來沒有人跑過——四個真的缺陷就藏在那裡。
+
+- **最嚴重的一個會 fail-open**:scalar 的環境變數會被後面的 `-f` **取代**而不是合併,而六個疊加層各自設 `SPRING_PROFILES_ACTIVE`。`-f oidc -f ai` 留下的是 `postgres,ai` —— 後端退回 permit-all,devidp 照常在跑,前端照常顯示登入畫面。**一個看起來有驗證、實際上沒有的 stack**,是這個 repo 能產生的最糟糕的失敗;而每一支測試都過,因為每一支都只跑一個疊加層。現在全部讀同一個 `WARROOM_PROFILES`,`stack.sh` 算聯集。
+- **一則壞訊息可以永久卡死索引器**:poison 的定義只涵蓋「信封壞掉」(解析失敗/schema 不符),但信封合法、**payload 無法投影**的那一類完全沒有處理——NOT NULL 違反被當成「資料庫暫時不開心」無限重試,offset 永遠不 commit,稽核與搜尋整條停擺。現在 SQLSTATE class 23(完整性約束)歸入 poison:資料錯了,重試一萬次也一樣。其餘(連線中斷、死鎖、資源不足)照舊重試,因為那些真的會自己好。
+- **測試假設自己獨佔資料庫**:retention 直接塞 `outbox_events`,而 events 疊加層一起跑時 publisher 會**真的把它發出去**,indexer 再把它投影回同一個房間的同一批表——計數就對不上了。改成只數自己種的列。另外「未發布的列是佇列、不該被刪」這個前提,在 publisher 有在跑的 stack 上根本無法成立(它會被發布),所以那兩個斷言改成偵測到 publisher 就明講跳過。
+- **測試會把正在跑的 stack 改回去**:`lib.mjs` 的 `compose()` 用「base + 自己寫死的疊加層」組指令,那是同一個 project 的**另一個、更窄的**視角。這些指令不全是唯讀的——`docker compose run` 會把服務調整成它拿到的設定,於是 retention 的 sweeper 安靜地把 collab 重建成沒有 events 環境變數的版本,`document.snapshot.created` 從此不再產生,整個 session 都是壞的,而且什麼都沒 log。現在 `stack.sh up` 把檔案清單寫進 `.stack.env`,`compose()` 以它為準。
+- 另外補上:`lib.mjs` 在 `/api/auth/config` 說要驗證時會自動登入,所以 socket 與 `/api` 在 oidc 疊加層下都帶 bearer。**還沒補**的是身分:oidc 下顯示名稱以 JWT 為準(這是對的,client 不該能宣稱別人的名字),所以會斷言「參與者叫什麼」的套件在 oidc 疊加層下仍需各自調整。
+- 驗證:`tests/compose/run.sh` 35 項(先在未修的設定上確認會抓到 fail-open),以及 base+ai+events+observability 三個疊加層同時上線時,12 支 e2e 全過(125 項);另外在 base+oidc+ai+events+observability 四個疊加層上確認後端真的同時掛著 `postgres,oidc,ai,kafka`,沒有 token 打 API 得到 401、帶 token 得到 200。
+
 **L. 需要真實環境才能推進(部署層,非程式碼缺口)**
 真實 IdP(Keycloak/Entra)對接演練、Slack/PagerDuty 告警接收端、TURN/TLS 443 真憑證、跨區域備份複寫與 KMS、目標環境的藍圖級工作負載(20k 連線)。
 

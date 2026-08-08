@@ -19,7 +19,7 @@ services:
   backend:
     build: ./backend
     environment:
-      SPRING_PROFILES_ACTIVE: postgres
+      SPRING_PROFILES_ACTIVE: ${WARROOM_PROFILES:-postgres}
       DB_URL: jdbc:postgresql://db:5432/warroomlive
       DB_USER: warroomlive
       DB_PASSWORD: warroomlive

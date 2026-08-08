@@ -182,9 +182,9 @@ export default function App() {
     null,
   );
   const [captionsOn, setCaptionsOn] = useState(false);
-  // What this participant is speaking, and — for the overlay — which language
-  // they want on top. One control, because in practice they are the same
-  // person's answer to "which language am I in".
+  // What this participant is speaking — nothing else. It used to also decide
+  // which language the subtitles put on top, which made one control mean two
+  // unrelated things; the subtitles now always show both, in a fixed order.
   const [captionLang, setCaptionLang] = useState<"zh" | "en">("zh");
   // The live track. Ephemeral by construction: it is never read back from the
   // server and never survives a reload, exactly like awareness on the CRDT plane.
@@ -1584,8 +1584,9 @@ export default function App() {
                   {captionsOn ? "💬 關閉字幕" : "💬 開啟字幕"}
                 </button>
                 <label className="caption-control__lang">
-                  <span className="visually-hidden">字幕語言</span>
+                  <span className="visually-hidden">你說話的語言</span>
                   <select
+                    title="你說話的語言(字幕中英文都會顯示)"
                     value={captionLang}
                     onChange={(e) =>
                       setCaptionLang(e.target.value as "zh" | "en")
@@ -1758,7 +1759,7 @@ export default function App() {
             {/* With the video, not beside it: a subtitle is read while looking at
               the person speaking, and a sidebar panel would make that a choice. */}
             {status === "in-room" && (
-              <CaptionOverlay lines={shownSubtitles} prefer={captionLang} />
+              <CaptionOverlay lines={shownSubtitles} />
             )}
           </div>
         </div>

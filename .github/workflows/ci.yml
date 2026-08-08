@@ -12,6 +12,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  compose:
+    name: Compose overlays
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The only stack-shaped suite that can run here. Everything else in
+      # tests/ needs a stack that is up; this needs `docker compose config`
+      # alone — no images pulled, no ports bound, no database — so the
+      # combinations nobody runs by hand get checked on every push.
+      #
+      # It exists because stacking overlays used to drop Spring profiles
+      # silently: `-f oidc -f ai` left the backend on its permit-all chain
+      # while the login screen still rendered.
+      - name: Overlay combinations
+        run: tests/compose/run.sh
+
   backend:
     name: Backend (Java 21)
     runs-on: ubuntu-latest

@@ -62,7 +62,7 @@ await alice.waitForSelector('.captions .caption', { timeout: 8000 })
 ok(true, 'a caption from another participant appears over the video')
 const first = alice.locator('.captions .caption').first()
 ok(
-  (await first.locator('.caption__text').innerText()).includes('這個功能下週上線'),
+  (await first.locator('.caption__text').first().innerText()).includes('這個功能下週上線'),
   'showing what was said',
 )
 ok(
@@ -81,10 +81,30 @@ ok(clickable === 'through', `the overlay does not intercept clicks (${clickable}
 
 if (config.translation) {
   await alice.waitForSelector('.captions .caption__alt', { timeout: 10000 })
-  const alt = await alice.locator('.captions .caption__alt').first().innerText()
+  const rows = await alice.locator('.captions .caption').first().locator('span').allInnerTexts()
   ok(
-    alt.includes('This feature ships next week'),
-    `the translation lands on the same line (${alt})`,
+    rows.some((r) => r.includes('This feature ships next week')),
+    `the translation lands on the same line (${rows.join(' / ')})`,
+  )
+
+  // Both languages, always, with Chinese first — whichever one was spoken.
+  // Nobody switches to see the other; the selector is only about what you say.
+  const zhIndex = rows.findIndex((r) => r.includes('這個功能下週上線'))
+  const enIndex = rows.findIndex((r) => r.includes('This feature ships next week'))
+  ok(zhIndex < enIndex, `中文 above English on a line spoken in Chinese (${zhIndex} < ${enIndex})`)
+
+  bob.say('Good morning', 'en-US')
+  await sleep(6000)
+  const enLine = alice.locator('.captions .caption').filter({ hasText: 'Good morning' }).first()
+  const enRows = await enLine.locator('span').allInnerTexts()
+  ok(
+    enRows.some((r) => r.includes('早安')) && enRows.some((r) => r.includes('Good morning')),
+    `a line spoken in English shows both too (${enRows.join(' / ')})`,
+  )
+  ok(
+    enRows.findIndex((r) => r.includes('早安')) <
+      enRows.findIndex((r) => r.includes('Good morning')),
+    'and in the same order, so the pair never swaps places between lines',
   )
 }
 

@@ -29,3 +29,6 @@ frontend/.vite/
 .idea/
 *.iml
 .vscode/
+
+# Written by stack.sh up: which overlays this machine's stack is running.
+.stack.env
