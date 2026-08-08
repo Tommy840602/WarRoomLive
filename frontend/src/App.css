@@ -1130,16 +1130,28 @@ body.is-resizing {
 
 /* A card, like every other side panel. The sticky band headings paint over
    the rows as they scroll under, so they need the same ground the panel has —
-   on the page background they read as stripes laid across it instead. */
+   on the page background they read as stripes laid across it instead.
+
+   NOT `overflow: hidden`, which is what a rounded card wants and what this had:
+   the mention picker hangs below the capture line and, on a short panel, below
+   the card. Clipped, its last option was not merely cut off — elementFromPoint
+   said the click landed on the workspace behind it, so with four people in the
+   room the fourth could not be chosen at all. The scroll area below does its
+   own clipping, which is the part that actually needed it. */
 .agenda {
   transition: var(--skin-fade);
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--surface);
-  overflow: hidden;
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+
+/* The rounding the card can no longer do for its last child. */
+.board {
+  border-bottom-left-radius: 9px;
+  border-bottom-right-radius: 9px;
 }
 
 .agenda__head {
@@ -1919,4 +1931,51 @@ body.is-resizing {
 .row__take:disabled {
   color: var(--ink-faint);
   cursor: default;
+}
+
+/* --- Mention picker ------------------------------------------------------
+   Anchored under the capture line, which is why .capture is positioned. A
+   suggestion list, not a menu: the input keeps focus and the caret stays where
+   somebody is typing. */
+.capture {
+  position: relative;
+}
+
+.mention {
+  position: absolute;
+  top: 100%;
+  left: 0.9rem;
+  right: 0.9rem;
+  z-index: 5;
+  margin: 0.15rem 0 0;
+  padding: 0.2rem;
+  list-style: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.mention__option {
+  display: flex;
+  align-items: baseline;
+  gap: 0.15rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+/* One highlight, driven by the keyboard. Hover writes into the same state, so
+   the pointer and the arrow keys cannot disagree about which row is next. */
+.mention__option--active {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.mention__at {
+  color: var(--info);
 }

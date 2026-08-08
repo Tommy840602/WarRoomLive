@@ -1,0 +1,13 @@
+-- An appointment can belong to somebody.
+--
+-- The capture line has always parsed `@名字`, and the panel has always shown it
+-- back in the preview. But a line that also named a time *range* becomes a
+-- calendar entry rather than a to-do, and `calendar_events` had no owner — so
+-- `與法務對齊 @bob 明天14:00-15:00` showed @bob in the preview and then dropped
+-- it on the way to the server. The parser's one invariant is that nothing it
+-- lifts out is lost; that held inside the parser and broke one layer above it.
+--
+-- Free text, like the to-do list's, and for the same reason: the person a thing
+-- belongs to is often not a user of this system. The mention picker suggests
+-- people in the room; it does not restrict the field to them.
+ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS assignee varchar(255);

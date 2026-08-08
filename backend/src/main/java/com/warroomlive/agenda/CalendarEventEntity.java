@@ -46,6 +46,10 @@ public class CalendarEventEntity {
     @Column(name = "ends_at")
     private Instant endsAt;
 
+    /** Free text: the person an appointment belongs to is often not a user here. */
+    @Column
+    private String assignee;
+
     @Column(name = "created_by", nullable = false)
     private String createdBy;
 
@@ -71,21 +75,28 @@ public class CalendarEventEntity {
     }
 
     public CalendarEventEntity(String room, String title, String description,
-            Instant startsAt, Instant endsAt, String createdBy) {
+            Instant startsAt, Instant endsAt, String assignee, String createdBy) {
         this.room = room;
         this.title = title;
         this.description = description == null ? "" : description;
         this.startsAt = startsAt;
         this.endsAt = endsAt;
+        this.assignee = assignee;
         this.createdBy = createdBy;
         this.createdAt = Instant.now();
     }
 
-    public void edit(String title, String description, Instant startsAt, Instant endsAt) {
+    public void edit(String title, String description, Instant startsAt, Instant endsAt,
+            String assignee) {
         this.title = title;
         this.description = description == null ? "" : description;
         this.startsAt = startsAt;
         this.endsAt = endsAt;
+        this.assignee = assignee;
+    }
+
+    public String getAssignee() {
+        return assignee;
     }
 
     /**

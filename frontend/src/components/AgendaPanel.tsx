@@ -1,8 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { CalendarEvent, Todo } from '../signaling/types'
 import { parseCapture, relativeTime } from '../agenda/capture'
 import { useNow } from '../agenda/useNow'
 import { CalendarGrid } from './CalendarGrid'
+import { MentionPicker } from './MentionPicker'
+import { completeMention, mentionAt, suggest } from '../agenda/mention'
 import {
   mergeFeeds,
   sectionsOf,
@@ -16,6 +18,8 @@ import {
 export interface AgendaPanelProps {
   todos: Todo[]
   events: CalendarEvent[]
+  /** Names in the room, offered when an `@` is typed. Suggestions, not a whitelist. */
+  members?: string[]
   /** Creates whatever the line described; the caller picks the endpoint. */
   onAdd: (captured: {
     text: string
@@ -50,8 +54,22 @@ const SECTIONS: { id: Exclude<Triage, never>; label: string; empty: string }[] =
  * tap away, because "what is on Thursday" and "what are we doing now" are two
  * questions about one agenda.
  */
-export function AgendaPanel({ todos, events, onAdd, onTriage, onDelete }: AgendaPanelProps) {
+export function AgendaPanel({
+  todos,
+  events,
+  members = [],
+  onAdd,
+  onTriage,
+  onDelete,
+}: AgendaPanelProps) {
   const [line, setLine] = useState('')
+  const [caret, setCaret] = useState(0)
+  const [picked, setPicked] = useState(0)
+  // Escape means "I meant this literally". It cannot be expressed by moving the
+  // caret — a mention at the end of the line has nowhere to move to that is
+  // still outside it — so dismissal is its own state, cleared by typing.
+  const [dismissed, setDismissed] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
   const [view, setView] = useState<'board' | 'calendar'>('board')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -65,6 +83,31 @@ export function AgendaPanel({ todos, events, onAdd, onTriage, onDelete }: Agenda
   const now = useNow()
 
   const parsed = useMemo(() => parseCapture(line), [line])
+
+  // The mention under the caret, and who it could mean. Recomputed from the
+  // line and the caret rather than tracked as state: two sources for "where am
+  // I in this string" is how a picker ends up completing the wrong word.
+  const token = useMemo(() => mentionAt(line, caret), [line, caret])
+  const options = useMemo(
+    () => (token && !dismissed ? suggest(members, token.query) : []),
+    [token, members, dismissed],
+  )
+  const picking = options.length > 0
+
+  const applyMention = (name: string) => {
+    if (!token) return
+    const next = completeMention(line, token, name)
+    setLine(next.line)
+    setCaret(next.caret)
+    setPicked(0)
+    setDismissed(false)
+    // The caret has to be put back by hand: React re-renders the value and the
+    // browser would otherwise drop it at the end of the new string.
+    requestAnimationFrame(() => {
+      inputRef.current?.focus()
+      inputRef.current?.setSelectionRange(next.caret, next.caret)
+    })
+  }
   const items = useMemo(() => mergeFeeds(todos, events), [todos, events])
   const sections = useMemo(() => sectionsOf(items, now), [items, now])
 
@@ -131,15 +174,54 @@ export function AgendaPanel({ todos, events, onAdd, onTriage, onDelete }: Agenda
         }}
       >
         <input
+          ref={inputRef}
           className="capture__line"
           value={line}
           placeholder="要做什麼…  @負責人  明天15:00"
           aria-label="新增項目"
-          onChange={(e) => setLine(e.target.value)}
+          role="combobox"
+          aria-expanded={picking}
+          aria-controls="capture-mention-list"
+          aria-autocomplete="list"
+          aria-activedescendant={
+            picking ? `capture-mention-option-${picked}` : undefined
+          }
+          onChange={(e) => {
+            setLine(e.target.value)
+            setCaret(e.target.selectionStart ?? e.target.value.length)
+            setPicked(0)
+            setDismissed(false)
+          }}
+          // Any caret movement can enter or leave a mention, so the picker has
+          // to follow the caret and not only the text.
+          onKeyUp={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+          onClick={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+          onKeyDown={(e) => {
+            if (!picking) return
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault()
+              const step = e.key === 'ArrowDown' ? 1 : -1
+              setPicked((i) => (i + step + options.length) % options.length)
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+              // Enter would otherwise submit the form with a half-typed name.
+              e.preventDefault()
+              applyMention(options[picked])
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              setDismissed(true)
+            }
+          }}
         />
         <button className="capture__go" type="submit" disabled={busy || !parsed.text}>
           加入
         </button>
+        <MentionPicker
+          options={options}
+          active={picked}
+          onPick={applyMention}
+          onHover={setPicked}
+          idPrefix="capture-mention"
+        />
       </form>
 
       {/* Shown only once something was lifted out of the line, so an ordinary
@@ -154,6 +236,14 @@ export function AgendaPanel({ todos, events, onAdd, onTriage, onDelete }: Agenda
           {parsed.dueAt && (
             <span className="chip chip--soon tabular" title={new Date(parsed.dueAt).toLocaleString()}>
               {relativeTime(parsed.dueAt)}
+            </span>
+          )}
+          {/* A range is about to occupy that stretch of the calendar, so show
+              the stretch. "1 天後" alone does not tell anyone how much of
+              Thursday afternoon is about to disappear. */}
+          {parsed.endAt && parsed.dueAt && (
+            <span className="chip chip--clock tabular">
+              {formatWhen({ kind: 'event', at: parsed.dueAt, endsAt: parsed.endAt })}
             </span>
           )}
           <span className="chip chip--stamp">{parsed.endAt ? '約會' : '待辦'}</span>

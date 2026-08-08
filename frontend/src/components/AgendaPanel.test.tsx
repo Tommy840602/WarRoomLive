@@ -349,3 +349,174 @@ describe('the clock', () => {
     expect(container.querySelector('.slot--now')).toBeTruthy()
   })
 })
+
+describe('@ mentions', () => {
+  const withMembers = (members: string[]) =>
+    render(
+      <AgendaPanel
+        todos={[]}
+        events={[]}
+        members={members}
+        onAdd={noop}
+        onTriage={noop}
+        onDelete={noop}
+      />,
+    )
+
+  const input = () => screen.getByLabelText('新增項目') as HTMLInputElement
+
+  it('shows the room when an @ is typed', () => {
+    // Typing @ and seeing who is here is what makes this discoverable rather
+    // than a syntax you have to already know.
+    withMembers(['Alice', 'Bob'])
+    fireEvent.change(input(), { target: { value: '寄簡報 @' } })
+    expect(screen.getByRole('listbox')).toBeTruthy()
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['@Alice', '@Bob'])
+  })
+
+  it('narrows as the name is typed', () => {
+    withMembers(['Alice', 'Bob', 'Michal'])
+    fireEvent.change(input(), { target: { value: '@al' } })
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['@Alice', '@Michal'])
+  })
+
+  it('offers nothing where there is no mention', () => {
+    withMembers(['Alice'])
+    fireEvent.change(input(), { target: { value: '寄簡報 明天15:00' } })
+    expect(screen.queryByRole('listbox')).toBeNull()
+  })
+
+  it('completes on Enter without submitting the form', () => {
+    // Enter inside the picker must not send a half-typed name.
+    const onAdd = vi.fn()
+    render(
+      <AgendaPanel
+        todos={[]}
+        events={[]}
+        members={['Alice']}
+        onAdd={onAdd}
+        onTriage={noop}
+        onDelete={noop}
+      />,
+    )
+    fireEvent.change(input(), { target: { value: '寄簡報 @al' } })
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    expect(input().value).toBe('寄簡報 @Alice ')
+    expect(onAdd).not.toHaveBeenCalled()
+  })
+
+  it('moves through the list with the arrow keys', () => {
+    withMembers(['Alice', 'Bob'])
+    fireEvent.change(input(), { target: { value: '@' } })
+    fireEvent.keyDown(input(), { key: 'ArrowDown' })
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    expect(input().value).toBe('@Bob ')
+  })
+
+  it('wraps rather than stopping at the end', () => {
+    withMembers(['Alice', 'Bob'])
+    fireEvent.change(input(), { target: { value: '@' } })
+    fireEvent.keyDown(input(), { key: 'ArrowUp' })
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    expect(input().value).toBe('@Bob ')
+  })
+
+  it('completes on a click', () => {
+    withMembers(['Alice', 'Bob'])
+    fireEvent.change(input(), { target: { value: '@b' } })
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Bob' }))
+    expect(input().value).toBe('@Bob ')
+  })
+
+  it('closes on Escape and leaves the line alone', () => {
+    // Dismissing means "I meant this literally", not "delete what I typed".
+    withMembers(['Alice'])
+    fireEvent.change(input(), { target: { value: '@al' } })
+    fireEvent.keyDown(input(), { key: 'Escape' })
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(input().value).toBe('@al')
+  })
+
+  it('still accepts somebody who is not in the room', async () => {
+    // The picker suggests; it does not restrict. A task can belong to someone
+    // who has never opened this app.
+    const onAdd = vi.fn().mockResolvedValue(undefined)
+    render(
+      <AgendaPanel
+        todos={[]}
+        events={[]}
+        members={['Alice']}
+        onAdd={onAdd}
+        onTriage={noop}
+        onDelete={noop}
+      />,
+    )
+    fireEvent.change(input(), { target: { value: '寄簡報 @外包廠商' } })
+    fireEvent.keyDown(input(), { key: 'Escape' })
+    await act(async () => screen.getByRole('button', { name: '加入' }).click())
+    expect(onAdd.mock.calls[0][0].assignee).toBe('外包廠商')
+  })
+
+  it('says it is a combobox, and which option is current', () => {
+    withMembers(['Alice', 'Bob'])
+    fireEvent.change(input(), { target: { value: '@' } })
+    expect(input().getAttribute('aria-expanded')).toBe('true')
+    expect(input().getAttribute('aria-activedescendant')).toBe('capture-mention-option-0')
+    fireEvent.keyDown(input(), { key: 'ArrowDown' })
+    expect(input().getAttribute('aria-activedescendant')).toBe('capture-mention-option-1')
+  })
+})
+
+describe('a range blocks the calendar', () => {
+  it('keeps the owner when the line also names a range', async () => {
+    // The bug this fixes: a span routed the line to the calendar, which had
+    // nowhere to put a person, so @bob showed in the preview and then vanished.
+    const onAdd = vi.fn().mockResolvedValue(undefined)
+    render(
+      <AgendaPanel todos={[]} events={[]} onAdd={onAdd} onTriage={noop} onDelete={noop} />,
+    )
+    fireEvent.change(screen.getByLabelText('新增項目'), {
+      target: { value: '與法務對齊 @bob 明天14:00-15:00' },
+    })
+    await act(async () => screen.getByRole('button', { name: '加入' }).click())
+
+    const [captured] = onAdd.mock.calls[0]
+    expect(captured.assignee).toBe('bob')
+    expect(captured.endAt).toBeDefined()
+  })
+
+  it('shows the stretch it is about to occupy, before it is sent', () => {
+    // "1 天後" does not say how much of Thursday afternoon disappears.
+    render(<AgendaPanel todos={[]} events={[]} onAdd={noop} onTriage={noop} onDelete={noop} />)
+    fireEvent.change(screen.getByLabelText('新增項目'), {
+      target: { value: '與法務對齊 明天14:00-15:00' },
+    })
+    expect(screen.getByText('14:00–15:00')).toBeTruthy()
+  })
+
+  it('draws an appointment on the grid as tall as it is long', () => {
+    const { container } = render(
+      <AgendaPanel
+        todos={[]}
+        events={[
+          event({
+            id: 1,
+            title: '與法務對齊',
+            startsAt: inHours(2),
+            endsAt: inHours(4),
+          }),
+        ]}
+        onAdd={noop}
+        onTriage={noop}
+        onDelete={noop}
+      />,
+    )
+    act(() => {
+      screen.getByRole('button', { name: '行事曆' }).click()
+    })
+    const slot = container.querySelector('.slot') as HTMLElement
+    // Two hours at 44px per hour; the minimum block is half an hour, so a
+    // height near the minimum would mean the range was ignored.
+    expect(parseFloat(slot.style.height)).toBeGreaterThan(80)
+  })
+})

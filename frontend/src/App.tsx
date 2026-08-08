@@ -604,6 +604,11 @@ export default function App() {
               title: captured.text,
               startsAt: captured.dueAt,
               endsAt: captured.endAt,
+              // An appointment can belong to somebody. Omitting this is what
+              // used to make `@bob 14:00-15:00` show @bob in the preview and
+              // then lose it: the span routed the line here, and here had
+              // nowhere to put a person.
+              assignee: captured.assignee ?? "",
             }),
           })
         : agendaWrite(`/api/todos/${roomPath()}`, {
@@ -1349,6 +1354,7 @@ export default function App() {
               <AgendaPanel
                 todos={todos}
                 events={calendar}
+                members={members.map((m) => m.name)}
                 onAdd={addAgendaItem}
                 onTriage={setAgendaTriage}
                 onDelete={deleteAgendaItem}

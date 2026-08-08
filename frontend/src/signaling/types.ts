@@ -92,6 +92,8 @@ export interface CalendarEvent {
   description: string
   startsAt: string
   endsAt?: string
+  /** Free text, like a to-do's: an appointment can belong to somebody. */
+  assignee?: string
   createdBy: string
   createdAt: string
   /** Entries can be marked dealt with, exactly as to-do items can. */

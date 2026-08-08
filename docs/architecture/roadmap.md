@@ -101,10 +101,19 @@
 
 驗證:`mvn test` 46、`frontend npm test` 195(含一個先確認會失敗的時鐘測試)、`tests/e2e`(signaling 12、room-acl 15、crdt 5、capacity 1、meetings 15、limits 13、agenda 32、reconnect 6、crdt-hardening 9、attachments 18、retention 15、due 3)、`tests/ui`(layout 23、agenda 21、media 10、collab 4、room-acl 12、quality 9)。
 
-**K. 需要真實環境才能推進(部署層,非程式碼缺口)**
+**K. @ 標註與時間區間** ✅ 已完成:兩個功能請求,交叉點上有一個真的缺陷。
+
+- **缺陷**:一行輸入一直解析得出 `@名字`,預覽也一直顯示它——但**同時**帶時間區間的那一行會被路由到行事曆,而 `calendar_events` 沒有負責人欄位,所以 `與法務對齊 @bob 明天14:00-15:00` 預覽看得到 @bob、送出去就沒了。parser 的「認不出來的字留在文字裡」在 parser 內部成立,在上一層破掉。V12 補上欄位。
+- **`@` 標註像 IG**(`agenda/mention.ts` + `MentionPicker`):打 `@` 就列出房間的人,空查詢列全部——那是讓人**發現**它的方式,而不是一個要先知道才用得到的語法。方向鍵/Enter/Tab/Esc,input 上是 combobox 語意。**欄位仍然是自由文字**:一件事可以屬於從沒開過這個 app 的人,所以列表外的名字照收——picker 是建議不是白名單,會拒絕未知名字的 picker 讓常見情況變快、真實情況變成不可能。
+- 兩個測試抓到的東西:`@` 是 `aria-hidden`,所以選項的可及名稱是名字本身而不是 `@名字`(那是對的,@ 是裝飾);以及 **Esc 用「把游標移出 token」實作根本不會生效**——行尾的標註沒有「外面」可以移過去,所以 dismiss 必須是自己的狀態。
+- **區間預覽**:送出前顯示那段區間本身,因為「1 天後」講不出「星期四下午會被吃掉多少」。
+
+驗證:`mvn test`、`frontend npm test` 229(mention 純邏輯 21、picker 與區間 13)、`tests/e2e/run.sh agenda`(負責人存得住、讀得回、改得掉、清得掉,而且不會被無關的 PATCH 洗掉)。
+
+**L. 需要真實環境才能推進(部署層,非程式碼缺口)**
 真實 IdP(Keycloak/Entra)對接演練、Slack/PagerDuty 告警接收端、TURN/TLS 443 真憑證、跨區域備份複寫與 KMS、目標環境的藍圖級工作負載(20k 連線)。
 
-**L. 等規模需求出現再做**
+**M. 等規模需求出現再做**
 Redis Cluster(資料分片;可用性已由 Sentinel 覆蓋)、OpenSearch 取代 Postgres FTS、部門/專案層級 ACL(需組織目錄整合)。
 
 ## 原則(照藍圖)
