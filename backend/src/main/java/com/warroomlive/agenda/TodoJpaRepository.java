@@ -28,6 +28,19 @@ public interface TodoJpaRepository extends JpaRepository<TodoEntity, Long> {
     List<TodoEntity> pageForRoom(@Param("room") String room,
             @Param("limit") int limit, @Param("offset") int offset);
 
+    /**
+     * Items whose time has come and whose room has not been told.
+     *
+     * <p>Bounded, and oldest first: a room that was closed over a weekend must
+     * not have three days of deadlines announced in one burst ahead of the one
+     * that matters now. Finished items are excluded — a deadline on something
+     * already done is not news.
+     */
+    @Query(value = "SELECT * FROM todos WHERE due_at IS NOT NULL AND due_at <= :now "
+            + "AND reminded_at IS NULL AND completed_at IS NULL ORDER BY due_at ASC LIMIT :limit",
+            nativeQuery = true)
+    List<TodoEntity> dueAndUnannounced(@Param("now") Instant now, @Param("limit") int limit);
+
     /** Retention candidates, oldest first and bounded. */
     List<TodoEntity> findByCreatedAtBeforeOrderByCreatedAtAsc(Instant cutoff, Limit limit);
 }

@@ -13,14 +13,15 @@ live.tommy-huang.dev {
 	# reverse_proxy handles WebSocket upgrades transparently, so /ws/signal and
 	# /ws/doc need no special casing. Caddy sets X-Forwarded-For to the client;
 	# infrastructure/edge/real-ip.conf is what makes the app trust it.
-	reverse_proxy 127.0.0.1:8088 {
-		# Recordings and shared files stream straight through from the object
-		# store, and can be large. Default is fine for bodies, but uploads go
-		# through here too: a presigned PUT carries the whole file.
-		request_body {
-			max_size 64MB
-		}
+	# Recordings and shared files stream straight through from the object store,
+	# and can be large — a presigned PUT carries the whole file through here.
+	# This is a site-level directive, NOT a reverse_proxy subdirective: as one,
+	# Caddy refuses to start the whole config.
+	request_body {
+		max_size 64MB
+	}
 
+	reverse_proxy 127.0.0.1:8088 {
 		# A meeting's WebSocket is idle between messages for long stretches and
 		# must not be reaped mid-call.
 		transport http {

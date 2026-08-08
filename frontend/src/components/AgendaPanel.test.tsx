@@ -300,3 +300,52 @@ describe('formatDay', () => {
     expect(formatDay('nonsense', now)).toBe('nonsense')
   })
 })
+
+describe('the clock', () => {
+  it('moves an item into 現在 when its time arrives, with nothing else changing', async () => {
+    // The defect this exists for: the bands were computed in a useMemo keyed on
+    // the items, so the clock only ever spoke when something else did. An item
+    // whose due time arrived sat in 稍後 until an unrelated edit.
+    vi.useFakeTimers()
+    try {
+      const soon = new Date(Date.now() + 25 * 3_600_000).toISOString()
+      const { container } = render(
+        <AgendaPanel
+          todos={[todo({ id: 1, text: '快到了', dueAt: soon })]}
+          events={[]}
+          onAdd={noop}
+          onTriage={noop}
+          onDelete={noop}
+        />,
+      )
+      expect(bandOf(container, '快到了')).toBe('稍後')
+
+      // Two hours pass. The props never change.
+      await act(async () => {
+        vi.advanceTimersByTime(2 * 3_600_000)
+      })
+      expect(bandOf(container, '快到了')).toBe('現在')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('gives the grid the same clock as the board', () => {
+    // Two views of one agenda disagreeing about whether something is 現在 is
+    // worse than either being wrong on its own.
+    const { container } = render(
+      <AgendaPanel
+        todos={[]}
+        events={[event({ id: 1, title: '現在的事', startsAt: inHours(1) })]}
+        onAdd={noop}
+        onTriage={noop}
+        onDelete={noop}
+      />,
+    )
+    expect(bandOf(container, '現在的事')).toBe('現在')
+    act(() => {
+      screen.getByRole('button', { name: '行事曆' }).click()
+    })
+    expect(container.querySelector('.slot--now')).toBeTruthy()
+  })
+})

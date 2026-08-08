@@ -58,6 +58,10 @@ public class CalendarEventEntity {
     @Column(name = "completed_by")
     private String completedBy;
 
+    /** When the room was told this had come due. Null until it has been. */
+    @Column(name = "reminded_at")
+    private Instant remindedAt;
+
     /** Null means the clock decides; a value means somebody disagreed with it. */
     @Enumerated(EnumType.STRING)
     @Column(name = "triage", length = 8)
@@ -111,6 +115,14 @@ public class CalendarEventEntity {
 
     public Triage getTriage() {
         return triage;
+    }
+
+    public Instant getRemindedAt() {
+        return remindedAt;
+    }
+
+    public void markReminded() {
+        this.remindedAt = Instant.now();
     }
 
     public Instant getCompletedAt() {

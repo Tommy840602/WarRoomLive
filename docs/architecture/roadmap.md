@@ -88,10 +88,23 @@
 
 驗證:`frontend npm test`(184 項;`grid.ts` 23 項含跨午夜、夾住、叢集 lane,`workspace.ts` 15 項含儲存的壞值)、`tests/ui/run.sh layout agenda`(真的拖得動、影像讓出寬度、重整後記得、方向鍵也能動;一小時的約會畫成一小時高、現在線只在今天、翻頁後消失而「今天」把它帶回來)。
 
-**J. 需要真實環境才能推進(部署層,非程式碼缺口)**
+**J. 補上真正的缺口(一次做完 A–F)** ✅ 已完成:roadmap 上只剩「要真實環境」與「等規模」,但翻程式碼還有六個真的缺口,其中一個是前一輪自己弄出來的。
+
+- **A. 議程的時鐘停了**(前一輪的缺陷):`sectionsOf(items)` 包在 `useMemo(..., [items])` 裡、沒有任何計時器,所以一個在「稍後」的項目時間到了**不會**移到「現在」,除非剛好有人改了什麼。行事曆格線有計時器、清單沒有——**同一份資料的兩個檢視會給出不一樣的答案**,而 PR #20 花三段解釋的「時鐘提議」在面板開著的時候其實不會提議。改成共用 `agenda/useNow`。測試先驗證它在修好之前會失敗:一個兩者皆過的測試等於沒有測試。
+- **B. `meetings` 是唯一寫了沒人讀得到的表**,而且**也是唯一沒有被保留期掃到的**——它只會一直長大,而且誰都看不到。`GET /api/meetings/{room}` 往回讀(歷史從剛發生的事開始),保留期以 **`started_at`** 計齡而不是 `ended_at`:節點掛掉的會議沒有結束時間,用可為 null 的欄位計齡會把那些列永遠留著。
+- **C. 會議結束後什麼都不留**:`MeetingExporter` 把聊天、議程、筆記、檔案、錄影縫成一份 Markdown。**對自己能做什麼是誠實的**——帶時間的東西框到那場會議,議程與筆記是房間目前狀態並且標明。筆記走 collab 服務新的 `GET /export/:name`(只有它有 Yjs)。踩到的坑:Java 的 HttpClient 預設會提議 h2c 升級,而 collab 是 WebSocket 伺服器——它的 `ws` 層看到不是 `websocket` 的 Upgrade 就回 400,**在請求到達 handler 之前**。端點沒問題,協商有問題;跟 `verify.sh` 那個 HTTP/2 的坑是同一家族。
+- **D. 到期不提醒任何人**:`DueReminder`(V11 `reminded_at`)。標記與廣播**同一個交易**——靠記憶體的排程器重啟後全部重講、兩個節點各講一次。走信令(給房裡的人的提示)而不是事件骨幹(工作的事實);`agenda-due` 與 `agenda` 刻意分開,後者是「重抓」,而只會重抓的面板顯示的還是同一份清單。
+- **F. 無障礙**:側邊頁籤原本是一排 `aria-pressed` 按鈕——螢幕閱讀器唸成七個各自獨立的開關而不是一個有七種設定的控制項,而且鍵盤要按七次 Tab 才走得到內容。改成真正的 tablist(roving tabindex、方向鍵/Home/End、`aria-controls` 接到 `role="tabpanel"`)。`RoomAnnouncer` 用 polite live region 播報**差異**:每次都重唸整份名單的區域,是會被關掉的區域。
+- **E. 兩個從沒跑過的 e2e**:`attachments` 首跑 18/18;`retention` 首跑 14/14,再補上 meetings 掃描後 15/15——補的時候才發現 `RETENTION_MEETINGS_DAYS` 根本沒接到 `application.yml`,環境變數送進去也不會生效。
+
+跑測試又抓到兩個**測試自己**的缺陷:`tests/ui/agenda` 用 `明天14:00-15:00` 斷言它落在「現在」,而那只有在下午兩點之後跑才成立——它整個下午都過,凌晨十二點五十分掛掉,產品什麼都沒變;同一支套件用「第一個 triage 按鈕」定位,但區段會隨項目移動重排,所以每按一次「第一個」就換一個項目。兩者都改成用名稱定位、用相對時間。
+
+驗證:`mvn test` 46、`frontend npm test` 195(含一個先確認會失敗的時鐘測試)、`tests/e2e`(signaling 12、room-acl 15、crdt 5、capacity 1、meetings 15、limits 13、agenda 32、reconnect 6、crdt-hardening 9、attachments 18、retention 15、due 3)、`tests/ui`(layout 23、agenda 21、media 10、collab 4、room-acl 12、quality 9)。
+
+**K. 需要真實環境才能推進(部署層,非程式碼缺口)**
 真實 IdP(Keycloak/Entra)對接演練、Slack/PagerDuty 告警接收端、TURN/TLS 443 真憑證、跨區域備份複寫與 KMS、目標環境的藍圖級工作負載(20k 連線)。
 
-**K. 等規模需求出現再做**
+**L. 等規模需求出現再做**
 Redis Cluster(資料分片;可用性已由 Sentinel 覆蓋)、OpenSearch 取代 Postgres FTS、部門/專案層級 ACL(需組織目錄整合)。
 
 ## 原則(照藍圖)

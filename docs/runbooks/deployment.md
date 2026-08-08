@@ -83,7 +83,9 @@ docker compose ps
 
 ## 4. 接上既有的 edge
 
-`infrastructure/edge/` 底下有兩份，**依既有 edge 二選一**：
+`infrastructure/edge/` 底下有兩份，**依既有 edge 二選一**。兩份都在沙箱裡實際跑過：
+起一個真的 edge（自簽憑證）擋在 loopback stack 前面，`tests/deploy/verify.sh` 兩邊都
+11/11 通過，並且用兩個瀏覽器經由 TLS 真的進了同一個房間、看到彼此、議程項目也同步過去。
 
 ### Caddy
 
@@ -96,6 +98,10 @@ sudo systemctl reload caddy
 ```
 
 憑證 Caddy 會自己簽（Let's Encrypt），前提是 DNS 已生效且 `:80` 對外通。
+
+`request_body` 是**站台層級**的指令，不是 `reverse_proxy` 的子指令。寫錯位置的話 Caddy
+不是忽略它而是整份設定拒絕啟動（`unrecognized subdirective request_body`）——先前這份檔案
+就是錯的，跑過才發現。`caddy validate` 會在 reload 之前擋下來，所以既有站台不會被拖下水。
 
 ### nginx
 
@@ -110,14 +116,32 @@ sudo nginx -t && sudo systemctl reload nginx
 `$connection_upgrade` 這個 map 如果既有設定裡還沒有，設定檔結尾有註解說明要加什麼——
 少了它 WebSocket 不會升級，房間會連不上。
 
+**這台機器沒有 IPv6 的話，把兩行 `listen [::]` 刪掉。** nginx 沒辦法條件式綁定：它會以
+`Address family not supported by protocol` 拒絕啟動，而 `nginx -t` **抓不到**（它根本
+不綁 socket）。所以流程會是「測試通過 → reload 失敗 → 這台機器上其他站台一起掛掉」。
+先確認：`ip -6 addr show scope global`。
+
 ---
 
 ## 5. 驗證
 
 ```bash
+tests/deploy/verify.sh                      # 在伺服器上跑，才會包含 loopback 那幾項
+```
+
+它涵蓋 DNS、憑證、HTTPS 轉址、兩個 WebSocket 的升級、安全標頭、限流會擋也會恢復，以及
+**最重要的那項**：一個人的洪水不會把其他人一起擋掉（`real-ip.conf` 有沒有生效）。
+
+手動的話：
+
+```bash
 curl -s https://live.tommy-huang.dev/api/health
 curl -sI https://live.tommy-huang.dev/ | head -3
 ```
+
+> 自己用 curl 測 WebSocket 升級的話**要加 `--http1.1`**。HTTP/2 禁止 `Connection` 與
+> `Upgrade` 這兩個 header（RFC 9113 §8.2.2），所以走 HTTP/2 打過去會拿到 400——那是
+> curl 的問題不是 edge 的問題。瀏覽器開 `wss://` 也是走 HTTP/1.1，理由相同。
 
 然後用瀏覽器開兩個分頁進同一個房間，確認：
 

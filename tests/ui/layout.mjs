@@ -1,19 +1,26 @@
-// The workspace layout, and the skin it wears.
+// The workspace: the panels, the split, and the skin.
 //
-// Nothing here can be checked without a browser: media queries, whether a
-// control is reachable, whether anything spills off the side, whether the
-// document really carries the theme the clock chose.
+// Nothing here can be checked without a browser and a real pointer: media
+// queries, whether a drag actually moves anything, whether a control is
+// reachable, whether anything spills off the side.
 //
 // The sidebar holds up to seven panels. Stacking them puts the chat box several
 // screens below the video — exactly where nobody scrolls during a call — and on
 // a desktop a 320px rail gives each panel a sliver. So one is open at a time, at
 // every width, and the tab strip chooses which.
+//
+// **Order matters here.** The last checks reload the page, and a reload drops
+// out of the room: no video tiles, no zoom control. So everything needing the
+// room runs first. Getting this wrong does not fail honestly — it times out
+// looking for an element that was never going to be there.
 import { RUN_ID, done, joinRoom, launch, ok, sleep } from './lib.mjs'
 
 const room = 'ui-layout-' + RUN_ID
 const DESKTOP = { width: 1280, height: 900 }
 // iPhone-ish portrait: the narrowest thing anyone will realistically use.
 const PHONE = { width: 390, height: 780 }
+/** Longer than the skin crossfade, or the colour read back is mid-transition. */
+const FADE_MS = 600
 
 const browser = await launch()
 const page = await joinRoom(browser, { room, name: 'Mobile' })
@@ -53,43 +60,38 @@ ok(overflow.doc <= overflow.win + 1,
   `the page does not scroll sideways (${overflow.doc} vs ${overflow.win})`)
 
 // --- The video tiles still get a usable width rather than collapsing.
-const tile = await page.locator('.video-tile').first().boundingBox()
-ok(tile !== null && tile.width >= 150, `video tiles stay legible (${Math.round(tile?.width ?? 0)}px)`)
+const phoneTile = await page.locator('.video-tile').first().boundingBox()
+ok(phoneTile !== null && phoneTile.width >= 150,
+  `video tiles stay legible on a phone (${Math.round(phoneTile?.width ?? 0)}px)`)
 
-// --- The skin. `auto` follows the local clock; an explicit choice overrides it
-//     and survives a reload, which is the whole reason the choice is stored.
 await page.setViewportSize(DESKTOP)
+await sleep(500)
+
+// --- The skin, while there is still a room to look at.
 const themeNow = () => page.evaluate(() => document.documentElement.dataset.theme)
 ok(['day', 'night'].includes(await themeNow()),
   `the document carries a skin from the first paint (${await themeNow()})`)
 
+const bodyBg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+const tileBg = () =>
+  page.evaluate(() => getComputedStyle(document.querySelector('.video-tile')).backgroundColor)
+
 await page.locator('.skin__btn', { hasText: '日' }).first().click()
-await sleep(200)
+await sleep(FADE_MS)
 ok((await themeNow()) === 'day', 'choosing 日 puts the room in the day skin')
-const dayBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+const dayBg = await bodyBg()
+const dayTile = await tileBg()
 
 await page.locator('.skin__btn', { hasText: '夜' }).first().click()
-await sleep(200)
+await sleep(FADE_MS)
 ok((await themeNow()) === 'night', 'and 夜 puts it in the night skin')
-const nightBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+const nightBg = await bodyBg()
 ok(dayBg !== nightBg, `the two skins really are different surfaces (${dayBg} vs ${nightBg})`)
 
 // Video stays black in both, or the letterboxing glows white around a face.
-const tileBg = await page.evaluate(
-  () => getComputedStyle(document.querySelector('.video-tile')).backgroundColor)
-await page.locator('.skin__btn', { hasText: '日' }).first().click()
-await sleep(200)
-const tileBgDay = await page.evaluate(
-  () => getComputedStyle(document.querySelector('.video-tile')).backgroundColor)
-ok(tileBg === tileBgDay, `the video tile stays the same black in both skins (${tileBgDay})`)
+ok(dayTile === (await tileBg()), `the video tile stays the same black in both skins (${dayTile})`)
 
-await page.reload()
-await sleep(1500)
-ok((await themeNow()) === 'day', 'and the choice survives a reload')
-
-// --- The split is the user's. Nothing here can be checked without a real
-//     pointer: the drag, whether the video reflows, whether it is remembered.
-await sleep(1500)
+// --- The split is the user's, and only a real pointer can check it.
 const sidebarWidth = () =>
   page.locator('.sidebar').boundingBox().then((b) => Math.round(b?.width ?? 0))
 
@@ -107,30 +109,39 @@ const dragged = await sidebarWidth()
 ok(dragged > before + 200,
   `dragging the divider really widens the panel (${before} → ${dragged})`)
 
-const tile = await page.locator('.video-tile').first().boundingBox()
-ok(tile.width < 900, `and the video gives up the width it took (${Math.round(tile.width)}px)`)
+const shrunk = await page.locator('.video-grid').boundingBox()
+ok(shrunk.width < 1280 - dragged,
+  `and the video gives up the width it took (${Math.round(shrunk.width)}px)`)
 
+// --- Tile size, independent of the split. With `1fr` columns the tile stretched
+//     to fill the row, so this control changed nothing a viewer could see.
+const smallTile = await page.locator('.video-tile').first().boundingBox()
+await page.getByLabel('放大視訊').click()
+await sleep(300)
+const bigTile = await page.locator('.video-tile').first().boundingBox()
+ok(bigTile.width > smallTile.width,
+  `the zoom control resizes the tiles (${Math.round(smallTile.width)} → ${Math.round(bigTile.width)})`)
+
+await page.getByLabel('縮小視訊').click()
+await sleep(300)
+const backDown = await page.locator('.video-tile').first().boundingBox()
+ok(Math.abs(backDown.width - smallTile.width) < 4, 'and back down again')
+
+// --- Everything past here reloads, which leaves the room.
 await page.reload()
 await sleep(2500)
+
 const remembered = await sidebarWidth()
 ok(Math.abs(remembered - dragged) < 20,
   `the split is remembered across a reload (${dragged} → ${remembered})`)
+ok((await themeNow()) === 'night', 'and so is the skin')
 
 // Keyboard, because a layout adjustable by pointer only is adjustable by some
 // people only.
 await page.locator('.divider').focus()
 await page.keyboard.press('ArrowRight')
-await sleep(200)
-ok((await sidebarWidth()) < remembered, 'and the arrow keys move it too')
-
-// --- Tile size, independent of the split.
-const gridWidth = await page.locator('.video-grid').boundingBox().then((b) => b.width)
-const smallTile = await page.locator('.video-tile').first().boundingBox()
-await page.getByLabel('放大視訊').click()
 await sleep(250)
-const bigTile = await page.locator('.video-tile').first().boundingBox()
-ok(bigTile.width > smallTile.width || gridWidth < 400,
-  `the zoom control resizes the tiles (${Math.round(smallTile.width)} → ${Math.round(bigTile.width)})`)
+ok((await sidebarWidth()) < remembered, 'the arrow keys move the divider too')
 
 await browser.close()
 done('UI-LAYOUT')

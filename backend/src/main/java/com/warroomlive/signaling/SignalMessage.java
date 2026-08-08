@@ -64,6 +64,14 @@ public record SignalMessage(
     public static final String TYPE_ATTACHMENT = "attachment";
     /** Server-originated: the room's to-do list or calendar changed; payload names which. */
     public static final String TYPE_AGENDA = "agenda";
+    /**
+     * Something on the agenda has come due, announced once by {@code DueReminder}.
+     *
+     * <p>Distinct from {@code agenda}, which says "the list changed, refetch".
+     * This says "this specific thing's time has arrived", and a panel that
+     * merely refetched on it would show the same list it already had.
+     */
+    public static final String TYPE_AGENDA_DUE = "agenda-due";
     public static final String TYPE_ROOM_FULL = "room-full";
     public static final String TYPE_ROOM_LOCKED = "room-locked";
     public static final String TYPE_ERROR = "error";

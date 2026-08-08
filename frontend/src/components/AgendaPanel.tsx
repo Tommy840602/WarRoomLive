@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { CalendarEvent, Todo } from '../signaling/types'
 import { parseCapture, relativeTime } from '../agenda/capture'
+import { useNow } from '../agenda/useNow'
 import { CalendarGrid } from './CalendarGrid'
 import {
   mergeFeeds,
@@ -58,9 +59,14 @@ export function AgendaPanel({ todos, events, onAdd, onTriage, onDelete }: Agenda
 
   // Re-parsed on every keystroke so the preview cannot disagree with what will
   // be sent — one parse, one source of truth.
+  // Ticks, so a due time arriving actually moves the item. Keyed into the memo
+  // below for the same reason: without it the bands were computed once per
+  // change to `items` and the clock never got a word in.
+  const now = useNow()
+
   const parsed = useMemo(() => parseCapture(line), [line])
   const items = useMemo(() => mergeFeeds(todos, events), [todos, events])
-  const sections = useMemo(() => sectionsOf(items), [items])
+  const sections = useMemo(() => sectionsOf(items, now), [items, now])
 
   const run = async (action: () => Promise<void>) => {
     setError(null)
@@ -176,6 +182,7 @@ export function AgendaPanel({ todos, events, onAdd, onTriage, onDelete }: Agenda
                     <Row
                       key={item.key}
                       item={item}
+                      now={now}
                       confirming={confirming === item.key}
                       onTriage={(next) => void run(() => onTriage(item, next))}
                       onDelete={() => void remove(item)}
@@ -192,6 +199,7 @@ export function AgendaPanel({ todos, events, onAdd, onTriage, onDelete }: Agenda
         <>
           <CalendarGrid
             items={items}
+            now={now}
             confirming={confirming}
             onTriage={(item, next) => void run(() => onTriage(item, next))}
             onDelete={(item) => void remove(item)}
@@ -211,6 +219,8 @@ export function AgendaPanel({ todos, events, onAdd, onTriage, onDelete }: Agenda
 
 interface RowProps {
   item: AgendaItem
+  /** From the panel's ticking clock, so a row and its band cannot disagree. */
+  now: Date
   confirming: boolean
   /** False on the calendar, where the day is already the heading above. */
   withDay?: boolean
@@ -227,8 +237,8 @@ interface RowProps {
  * else — the stamps, the owner, the time — is quiet, and the absolute time
  * lives in the tooltip.
  */
-function Row({ item, confirming, withDay = true, onTriage, onDelete, onBlurDelete }: RowProps) {
-  const triage = triageOf(item)
+function Row({ item, now, confirming, withDay = true, onTriage, onDelete, onBlurDelete }: RowProps) {
+  const triage = triageOf(item, now)
   const auto = isAuto(item)
   const stamps = stampsOf(item)
 
@@ -249,7 +259,7 @@ function Row({ item, confirming, withDay = true, onTriage, onDelete, onBlurDelet
             className="chip chip--clock tabular"
             title={new Date(item.at).toLocaleString()}
           >
-            {formatWhen(item, withDay)}
+            {formatWhen(item, withDay, now)}
           </span>
         )}
         {item.done && item.completedBy && (

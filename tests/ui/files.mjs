@@ -5,7 +5,7 @@
 // The browser is what makes this worth running: the upload goes straight from
 // the page to the object store through a presigned URL, so the only place that
 // path can be checked as a whole is a page that actually performs it.
-import { RUN_ID, done, joinRoom, launch, ok, sleep } from './lib.mjs'
+import { RUN_ID, done, joinRoom, launch, ok, openPanel, sleep } from './lib.mjs'
 
 const room = 'ui-files-' + RUN_ID
 const CONTENT = 'shared-by-the-browser-' + RUN_ID
@@ -13,6 +13,7 @@ const CONTENT = 'shared-by-the-browser-' + RUN_ID
 const browser = await launch()
 const alice = await joinRoom(browser, { room, name: 'Alice' })
 const bob = await joinRoom(browser, { room, name: 'Bob' })
+for (const page of [alice, bob]) await openPanel(page, '檔案', '.files')
 await sleep(2000)
 
 ok(await alice.locator('.files').count() === 1, 'the room offers a files panel')

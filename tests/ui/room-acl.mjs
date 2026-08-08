@@ -1,7 +1,7 @@
 // Room permissions as the UI presents them. The server enforces the rules —
 // what matters here is that the interface only offers what the server would
 // allow, and that a removed participant is actually put out of the room.
-import { RUN_ID, done, joinRoom, launch, memberNames, ok, sleep } from './lib.mjs'
+import { RUN_ID, done, joinRoom, launch, memberNames, ok, openPanel, sleep } from './lib.mjs'
 
 const room = 'ui-acl-' + RUN_ID
 const browser = await launch()
@@ -9,6 +9,12 @@ const browser = await launch()
 const host = await joinRoom(browser, { room, name: 'Host' })
 const guest = await joinRoom(browser, { room, name: 'Guest' })
 await sleep(3000)
+
+// One sidebar panel is open at a time, and the default is chat — so the member
+// list has to be opened before anything can be seen on it. A `.count()` would
+// pass regardless, since a hidden element is still an element; that is exactly
+// why the visibility waits below are the ones worth having.
+for (const page of [host, guest]) await openPanel(page, '成員', '.members__title')
 
 // --- Affordances differ by role.
 ok(await host.locator('.members__host').count() === 1, 'the host sees exactly one crown')

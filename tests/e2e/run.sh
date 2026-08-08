@@ -41,12 +41,12 @@ done
 
 # Nothing named: pick by what the running stack can support.
 if [ -z "$SUITES" ]; then
-  SUITES="signaling room-acl crdt capacity reconnect limits retention agenda"
+  SUITES="signaling room-acl crdt capacity meetings reconnect limits retention agenda"
   running devidp && SUITES="$SUITES oidc"
   running indexer && SUITES="$SUITES events"
   running minio && SUITES="$SUITES recordings attachments"
   if [ "$ALL" = "1" ]; then
-    SUITES="$SUITES crdt-hardening"
+    SUITES="$SUITES crdt-hardening due"
     [ "$(replicas backend)" -ge 2 ] && SUITES="$SUITES scale"
   fi
 fi

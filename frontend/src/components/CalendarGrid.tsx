@@ -22,6 +22,9 @@ import {
 
 interface CalendarGridProps {
   items: AgendaItem[]
+  /** The panel's clock. Shared so the grid and the board cannot disagree about
+   *  whether an item is in 現在 — they are two views of one agenda. */
+  now: Date
   onTriage: (item: AgendaItem, next: Triage | 'auto') => void
   onDelete: (item: AgendaItem) => void
   confirming: string | null
@@ -47,10 +50,9 @@ const TWO_LINE_PX = 32
  * that is two or three; drag the workspace divider and it becomes a week. Seven
  * 40px stripes would be a week view in name only.
  */
-export function CalendarGrid({ items, onTriage, onDelete, confirming }: CalendarGridProps) {
+export function CalendarGrid({ items, now, onTriage, onDelete, confirming }: CalendarGridProps) {
   const [anchor, setAnchor] = useState(() => startOfDay(new Date()))
   const [width, setWidth] = useState(0)
-  const [now, setNow] = useState(() => new Date())
   const frameRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -64,13 +66,6 @@ export function CalendarGrid({ items, onTriage, onDelete, confirming }: Calendar
     const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width))
     observer.observe(frame)
     return () => observer.disconnect()
-  }, [])
-
-  // The now-line has to move or it is a lie. A minute is finer than anyone
-  // reads a calendar at, and coarse enough to cost nothing.
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 60_000)
-    return () => window.clearInterval(timer)
   }, [])
 
   const columns = columnsFor(width || 320)

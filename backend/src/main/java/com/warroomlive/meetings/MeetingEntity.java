@@ -39,19 +39,19 @@ public class MeetingEntity {
         this.participantPeak = 1;
     }
 
-    Long id() {
+    public Long id() {
         return id;
     }
 
-    String room() {
+    public String room() {
         return room;
     }
 
-    Instant startedAt() {
+    public Instant startedAt() {
         return startedAt;
     }
 
-    int participantPeak() {
+    public int participantPeak() {
         return participantPeak;
     }
 
@@ -65,7 +65,7 @@ public class MeetingEntity {
         this.endedAt = Instant.now();
     }
 
-    Instant endedAt() {
+    public Instant endedAt() {
         return endedAt;
     }
 }

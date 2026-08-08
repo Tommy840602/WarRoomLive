@@ -105,9 +105,15 @@
   position: relative;
 }
 
+/* The tile size is the tile size. With `1fr` the column stretched to fill the
+   row, so with one or two people the zoom control changed the number of columns
+   and nothing a viewer could see — a control that does nothing in the common
+   case. Now --tile-min is the width, capped at the row so a large step cannot
+   overflow a narrow stage, and the tiles centre in whatever is left over. */
 .video-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--tile-min, 240px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(0, min(var(--tile-min, 240px), 100%)));
+  justify-content: center;
   gap: 1rem;
 }
 
@@ -362,7 +368,7 @@ body.is-resizing {
   color: var(--ink-dim);
 }
 
-.sidebar__tab[aria-pressed='true'] {
+.sidebar__tab[aria-selected='true'] {
   color: var(--ink);
   border-bottom-color: var(--accent);
 }
@@ -375,6 +381,7 @@ body.is-resizing {
 
 .sidebar[data-active='members'] .sidebar__panel[data-panel='members'],
 .sidebar[data-active='agenda'] .sidebar__panel[data-panel='agenda'],
+.sidebar[data-active='meetings'] .sidebar__panel[data-panel='meetings'],
 .sidebar[data-active='recordings'] .sidebar__panel[data-panel='recordings'],
 .sidebar[data-active='search'] .sidebar__panel[data-panel='search'],
 .sidebar[data-active='files'] .sidebar__panel[data-panel='files'],
@@ -1816,10 +1823,9 @@ body.is-resizing {
     margin-top: 1rem;
   }
 
-  /* Two tiles across in landscape, one in portrait — 160px is about the
-     smallest a face is still recognisable at. */
+  /* The tile size still comes from --tile-min, so the zoom control works here
+     too; only the breathing room shrinks. */
   .video-grid {
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 0.5rem;
   }
 
@@ -1833,4 +1839,84 @@ body.is-resizing {
   .row__drop {
     color: var(--ink-faint);
   }
+}
+
+/* --- Something has come due ----------------------------------------------
+   The one thing on this page that arrives without anybody having acted, so it
+   gets the accent and a place above the workspace. It does not fade: a nudge
+   that clears itself is one the person who looked away never saw. */
+.due {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0.75rem 0 0;
+  padding: 0.6rem 0.9rem;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+
+.due__label {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  padding-top: 0.1rem;
+}
+
+.due__list {
+  flex: 1 1 auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.due__item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.due__dismiss {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  font-family: inherit;
+}
+
+.due__dismiss:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
+/* Export sits at the end of a history row; same restraint as the delete
+   button, but it is not destructive so it does not hide until hover. */
+.row__take {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.72rem;
+  font-family: inherit;
+}
+
+.row__take:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.row__take:disabled {
+  color: var(--ink-faint);
+  cursor: default;
 }

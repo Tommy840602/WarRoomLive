@@ -30,6 +30,9 @@ import {
   type SearchHit,
 } from "./components/SearchPanel";
 import { AgendaPanel } from "./components/AgendaPanel";
+import { MeetingsPanel } from "./components/MeetingsPanel";
+import { RoomAnnouncer } from "./components/RoomAnnouncer";
+import { SidebarTabs } from "./components/SidebarTabs";
 import { WorkspaceDivider } from "./components/WorkspaceDivider";
 import { ReactionBar } from "./components/ReactionBar";
 import { ThemeToggle } from "./components/ThemeToggle";
@@ -38,10 +41,12 @@ import {
   type FloatingReaction,
 } from "./components/FloatingReactions";
 import type {
+  AgendaDue,
   Attachment,
   CalendarEvent,
   MediaState,
   PeerInfo,
+  Meeting,
   RoomStateInfo,
   StoredMessage,
   Todo,
@@ -83,6 +88,7 @@ interface ChatEntry {
 type SidebarTab =
   | "members"
   | "agenda"
+  | "meetings"
   | "recordings"
   | "search"
   | "files"
@@ -131,7 +137,11 @@ export default function App() {
   // endpoint 404s without an object store, so its response is the answer.
   const [fileSharingAvailable, setFileSharingAvailable] = useState(false);
   const [todos, setTodos] = useState<Todo[]>([]);
-  const [calendar, setCalendar] = useState<CalendarEvent[]>([]);
+  const [calendar, setCalendar] = useState<CalendarEvent[]>([])
+  const [meetings, setMeetings] = useState<Meeting[]>([])
+  // What the server has told the room is due. Kept until dismissed: a nudge
+  // that vanishes on its own is one the person who looked away never saw.
+  const [due, setDue] = useState<AgendaDue[]>([]);
   // The shared list and calendar need a database; without one the endpoints
   // 404 and the panels are not offered rather than failing on every action.
   const [agendaAvailable, setAgendaAvailable] = useState(false);
@@ -500,6 +510,46 @@ export default function App() {
     [authHeaders],
   );
 
+  /** The room's own history. Absent without the postgres profile, like the agenda. */
+  const loadMeetings = useCallback(async (roomName: string) => {
+    try {
+      const res = await fetch(`/api/meetings/${encodeURIComponent(roomName)}`, {
+        headers: authHeaders(),
+      })
+      setMeetings(res.ok ? ((await res.json()) as Meeting[]) : [])
+    } catch {
+      setMeetings([])
+    }
+  }, [authHeaders])
+
+  /**
+   * Downloads a meeting's record.
+   *
+   * <p>Fetched rather than linked because the request needs the auth header,
+   * which an `<a href>` cannot carry. The blob URL is revoked straight away —
+   * it pins the whole document in memory until it is.
+   */
+  const exportMeeting = useCallback(
+    async (meeting: Meeting) => {
+      const roomName = joinedAsRef.current?.room ?? ''
+      const res = await fetch(
+        `/api/meetings/${encodeURIComponent(roomName)}/${meeting.id}/export`,
+        { headers: authHeaders() },
+      )
+      if (!res.ok) throw new Error(`匯出失敗(HTTP ${res.status})`)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${roomName.replace(/[^A-Za-z0-9._-]/g, '-')}-${meeting.id}.md`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    },
+    [authHeaders],
+  )
+
   /**
    * Sends an agenda change and reloads. The list is refetched rather than
    * patched locally because the server owns the ordering — open items first,
@@ -740,6 +790,18 @@ export default function App() {
         const kind = (msg.payload as { kind?: string } | undefined)?.kind;
         if (kind === "todo" || kind === "calendar") void loadAgenda(room);
       });
+      // Something's time has arrived. Distinct from `agenda`, which only says
+      // the list changed: refetching on this would show the same list again.
+      client.on("agenda-due", (msg) => {
+        const item = msg.payload as AgendaDue | undefined;
+        if (!item?.id) return;
+        setDue((current) =>
+          current.some((d) => d.kind === item.kind && d.id === item.id)
+            ? current
+            : [...current, item],
+        );
+        void loadAgenda(room);
+      });
       client.on("room-locked", () => {
         teardown();
         setError("房間已被主持人鎖定,目前不開放加入");
@@ -841,6 +903,7 @@ export default function App() {
       void loadRecordings(room);
       void loadFiles(room);
       void loadAgenda(room);
+      void loadMeetings(room);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStatus("error");
@@ -933,6 +996,9 @@ export default function App() {
     if (status === "in-room" && agendaAvailable) {
       panels.push({ id: "agenda", label: "議程" });
     }
+    if (status === "in-room" && meetings.length > 0) {
+      panels.push({ id: "meetings", label: "紀錄" });
+    }
     if (status === "in-room" && recordings.length > 0) {
       panels.push({ id: "recordings", label: "錄影" });
     }
@@ -941,7 +1007,7 @@ export default function App() {
       panels.push({ id: "files", label: "檔案" });
     panels.push({ id: "chat", label: "聊天" });
     return panels;
-  }, [status, recordings.length, fileSharingAvailable, agendaAvailable]);
+  }, [status, recordings.length, fileSharingAvailable, agendaAvailable, meetings.length]);
 
   /** Host only: lock or unlock the room to newcomers (server re-validates). */
   const toggleLock = useCallback(() => {
@@ -1141,12 +1207,42 @@ export default function App() {
           </p>
         )}
 
+      {/* Something's time has come. `assertive` because it is the one thing on
+          this page that arrives without anybody having acted — a polite region
+          would wait for a pause that a live meeting never has. It stays until
+          dismissed: a nudge that fades is one the person who looked away
+          never saw. */}
+      {due.length > 0 && (
+        <div className="due" role="alert" aria-live="assertive">
+          <span className="due__label">時間到</span>
+          <ul className="due__list">
+            {due.map((item) => (
+              <li key={`${item.kind}:${item.id}`} className="due__item">
+                {item.text}
+                {item.assignee && <span className="chip chip--who">@{item.assignee}</span>}
+              </li>
+            ))}
+          </ul>
+          <button
+            className="due__dismiss"
+            onClick={() => setDue([])}
+            aria-label="知道了,關閉提醒"
+          >
+            知道了
+          </button>
+        </div>
+      )}
+
       {status === "in-room" && (
         <ReactionBar
           onReact={sendReaction}
           handRaised={handRaised}
           onToggleHand={toggleHand}
         />
+      )}
+
+      {status === "in-room" && (
+        <RoomAnnouncer names={members.map((m) => m.name)} />
       )}
 
       <section
@@ -1220,20 +1316,19 @@ export default function App() {
               each a sliver and none of them enough room to be read — on a
               desktop as much as on a phone — so one is open at a time and this
               chooses which. */}
-          <nav className="sidebar__tabs" aria-label="側邊面板">
-            {sidebarPanels.map((panel) => (
-              <button
-                key={panel.id}
-                className="sidebar__tab"
-                aria-pressed={sidebarTab === panel.id}
-                onClick={() => setSidebarTab(panel.id)}
-              >
-                {panel.label}
-              </button>
-            ))}
-          </nav>
+          <SidebarTabs
+            tabs={sidebarPanels}
+            active={sidebarTab}
+            onSelect={setSidebarTab}
+          />
           {status === "in-room" && (
-            <div className="sidebar__panel" data-panel="members">
+            <div
+              className="sidebar__panel"
+              data-panel="members"
+              id="panel-members"
+              role="tabpanel"
+              aria-labelledby="tab-members"
+            >
               <MemberList
                 members={members}
                 hostId={roomState.host}
@@ -1244,7 +1339,13 @@ export default function App() {
             </div>
           )}
           {status === "in-room" && agendaAvailable && (
-            <div className="sidebar__panel" data-panel="agenda">
+            <div
+              className="sidebar__panel"
+              data-panel="agenda"
+              id="panel-agenda"
+              role="tabpanel"
+              aria-labelledby="tab-agenda"
+            >
               <AgendaPanel
                 todos={todos}
                 events={calendar}
@@ -1254,8 +1355,25 @@ export default function App() {
               />
             </div>
           )}
+          {status === "in-room" && meetings.length > 0 && (
+            <div
+              className="sidebar__panel"
+              data-panel="meetings"
+              id="panel-meetings"
+              role="tabpanel"
+              aria-labelledby="tab-meetings"
+            >
+              <MeetingsPanel meetings={meetings} onExport={exportMeeting} />
+            </div>
+          )}
           {status === "in-room" && recordings.length > 0 && (
-            <div className="sidebar__panel" data-panel="recordings">
+            <div
+              className="sidebar__panel"
+              data-panel="recordings"
+              id="panel-recordings"
+              role="tabpanel"
+              aria-labelledby="tab-recordings"
+            >
               <RecordingsPanel
                 recordings={recordings}
                 onRequestUrl={recordingUrl}
@@ -1264,12 +1382,24 @@ export default function App() {
             </div>
           )}
           {status === "in-room" && (
-            <div className="sidebar__panel" data-panel="search">
+            <div
+              className="sidebar__panel"
+              data-panel="search"
+              id="panel-search"
+              role="tabpanel"
+              aria-labelledby="tab-search"
+            >
               <SearchPanel onSearch={searchMessages} />
             </div>
           )}
           {status === "in-room" && fileSharingAvailable && (
-            <div className="sidebar__panel" data-panel="files">
+            <div
+              className="sidebar__panel"
+              data-panel="files"
+              id="panel-files"
+              role="tabpanel"
+              aria-labelledby="tab-files"
+            >
               <FilesPanel
                 files={files}
                 onUpload={uploadFile}
@@ -1278,7 +1408,13 @@ export default function App() {
               />
             </div>
           )}
-          <div className="sidebar__panel" data-panel="chat">
+          <div
+              className="sidebar__panel"
+              data-panel="chat"
+              id="panel-chat"
+              role="tabpanel"
+              aria-labelledby="tab-chat"
+            >
             <ChatPanel
               messages={messages.map((m) => ({
                 id: m.id,
