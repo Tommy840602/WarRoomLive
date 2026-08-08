@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { bilingual } from '../captions/lang'
 import { parseSummary, type SummaryTask } from '../captions/summary'
 import type { Meeting, TranscriptLine } from '../signaling/types'
 
@@ -184,14 +185,18 @@ export function TranscriptPanel({
             <li className="transcript__line" key={line.id}>
               <span className="transcript__time tabular">{time(line.spokenAt)}</span>
               <span className="transcript__speaker">{line.speaker}</span>
-              <span className="transcript__text" lang={line.lang}>
-                {line.text}
-              </span>
-              {line.translation && (
-                <span className="transcript__alt" lang={line.translationLang}>
-                  {line.translation}
+              {/* Chinese above English, the same order the live subtitles use.
+                  A transcript that ordered by whichever language was spoken
+                  would alternate down the page. */}
+              {bilingual(line).map((row, index) => (
+                <span
+                  key={row.lang + index}
+                  className={row.original ? 'transcript__text' : 'transcript__alt'}
+                  lang={row.lang || undefined}
+                >
+                  {row.text}
                 </span>
-              )}
+              ))}
             </li>
           ))}
         </ol>

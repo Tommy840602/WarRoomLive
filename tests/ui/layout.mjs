@@ -91,6 +91,61 @@ ok(dayBg !== nightBg, `the two skins really are different surfaces (${dayBg} vs 
 // Video stays black in both, or the letterboxing glows white around a face.
 ok(dayTile === (await tileBg()), `the video tile stays the same black in both skins (${dayTile})`)
 
+// --- Every control has to be readable, in both skins.
+//
+// This is the check that would have caught the worst bug in this file's
+// history: `.app__controls button` painted every button with `--accent-ink` —
+// the colour that goes ON the accent — and a secondary button swapped only the
+// background. The result was dark-on-dark at night and, in day, white text on a
+// white button, measured at 1.04:1. Every existing suite passed: the buttons
+// were present, clickable, correctly labelled and completely invisible.
+//
+// So this measures what was actually painted, rather than what class was
+// applied. Contrast is computed from the resolved colours the way WCAG defines
+// it; 4.5:1 is the AA threshold for body text.
+const contrastOfControls = () =>
+  page.evaluate(() => {
+    const lin = (c) => {
+      const v = c / 255
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
+    }
+    const parse = (s) => (s.match(/[\d.]+/g) || []).slice(0, 3).map(Number)
+    const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    /** Walks up for the first non-transparent background, as the eye does. */
+    const groundOf = (el) => {
+      for (let node = el; node; node = node.parentElement) {
+        const bg = getComputedStyle(node).backgroundColor
+        const parts = parse(bg)
+        const alpha = (bg.match(/[\d.]+/g) || [])[3]
+        if (parts.length === 3 && alpha !== '0') return parts
+      }
+      return [0, 0, 0]
+    }
+    return [...document.querySelectorAll('.app__controls button')].map((el) => {
+      const ink = parse(getComputedStyle(el).color)
+      const ground = groundOf(el)
+      const a = lum(ink)
+      const b = lum(ground)
+      const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+      return { label: el.textContent.trim().slice(0, 12), ratio: Math.round(ratio * 100) / 100 }
+    })
+  })
+
+const nightContrast = await contrastOfControls()
+const nightWorst = nightContrast.reduce((w, c) => (c.ratio < w.ratio ? c : w))
+ok(nightWorst.ratio >= 4.5,
+  `every control is readable in the night skin (worst: ${nightWorst.label} at ${nightWorst.ratio}:1)`)
+
+await page.locator('.skin__btn', { hasText: '日' }).first().click()
+await sleep(FADE_MS)
+const dayContrast = await contrastOfControls()
+const dayWorst = dayContrast.reduce((w, c) => (c.ratio < w.ratio ? c : w))
+ok(dayWorst.ratio >= 4.5,
+  `and in the day skin (worst: ${dayWorst.label} at ${dayWorst.ratio}:1)`)
+
+await page.locator('.skin__btn', { hasText: '夜' }).first().click()
+await sleep(FADE_MS)
+
 // --- The split is the user's, and only a real pointer can check it.
 const sidebarWidth = () =>
   page.locator('.sidebar').boundingBox().then((b) => Math.round(b?.width ?? 0))
