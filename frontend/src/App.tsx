@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -10,12 +11,13 @@ import {
   defaultSignalingUrl,
   type ConnectionState,
 } from "./signaling/SignalingClient";
-import { WebRtcRoom } from "./webrtc/WebRtcRoom";
+import { WebRtcRoom, type WebRtcRoomEvents } from "./webrtc/WebRtcRoom";
 import {
   SfuRoom,
   fetchMediaConfig,
   fetchMediaToken,
   resolveLivekitUrl,
+  type MediaConfig,
   type MediaRoom,
 } from "./webrtc/SfuRoom";
 import { VideoTile } from "./components/VideoTile";
@@ -33,6 +35,19 @@ import { AgendaPanel } from "./components/AgendaPanel";
 import { MeetingsPanel } from "./components/MeetingsPanel";
 import { RoomAnnouncer } from "./components/RoomAnnouncer";
 import { SidebarTabs } from "./components/SidebarTabs";
+import { CaptionOverlay } from "./components/CaptionOverlay";
+import {
+  TranscriptPanel,
+  type MeetingSummary,
+} from "./components/TranscriptPanel";
+import { useSpeechCaptions } from "./captions/useSpeechCaptions";
+import {
+  applyCaption,
+  applyTranslation,
+  prune,
+  visible,
+  type SubtitleLine,
+} from "./captions/subtitle";
 import { WorkspaceDivider } from "./components/WorkspaceDivider";
 import { ReactionBar } from "./components/ReactionBar";
 import { ThemeToggle } from "./components/ThemeToggle";
@@ -44,15 +59,20 @@ import type {
   AgendaDue,
   Attachment,
   CalendarEvent,
+  CaptionConfig,
+  CaptionPayload,
+  CaptionTranslatedPayload,
   MediaState,
   PeerInfo,
   Meeting,
   RoomStateInfo,
   StoredMessage,
   Todo,
+  TranscriptLine,
 } from "./signaling/types";
 import type { PeerQuality } from "./webrtc/quality";
 import type { AgendaItem, Triage } from "./agenda/item";
+import { parseCapture } from "./agenda/capture";
 import {
   SIDEBAR_DEFAULT,
   SIDEBAR_KEY,
@@ -88,6 +108,7 @@ interface ChatEntry {
 type SidebarTab =
   | "members"
   | "agenda"
+  | "transcript"
   | "meetings"
   | "recordings"
   | "search"
@@ -122,6 +143,15 @@ export default function App() {
   const [raisedHands, setRaisedHands] = useState<Set<string>>(new Set());
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
   const [mediaMode, setMediaMode] = useState<"mesh" | "sfu">("mesh");
+  /**
+   * The same value, readable from a closure that was built earlier.
+   *
+   * The `room-state` handler is registered once per join and would otherwise
+   * compare against whatever `mediaMode` was at that moment — which is "mesh",
+   * for ever, so the room would try to switch to the SFU on every room-state
+   * message it received after the first.
+   */
+  const mediaModeRef = useRef<"mesh" | "sfu">("mesh");
   const [recordingId, setRecordingId] = useState<string | null>(null);
   const [roomState, setRoomState] = useState<RoomStateInfo>({
     host: "",
@@ -137,14 +167,30 @@ export default function App() {
   // endpoint 404s without an object store, so its response is the answer.
   const [fileSharingAvailable, setFileSharingAvailable] = useState(false);
   const [todos, setTodos] = useState<Todo[]>([]);
-  const [calendar, setCalendar] = useState<CalendarEvent[]>([])
-  const [meetings, setMeetings] = useState<Meeting[]>([])
+  const [calendar, setCalendar] = useState<CalendarEvent[]>([]);
+  const [meetings, setMeetings] = useState<Meeting[]>([]);
   // What the server has told the room is due. Kept until dismissed: a nudge
   // that vanishes on its own is one the person who looked away never saw.
   const [due, setDue] = useState<AgendaDue[]>([]);
   // The shared list and calendar need a database; without one the endpoints
   // 404 and the panels are not offered rather than failing on every action.
   const [agendaAvailable, setAgendaAvailable] = useState(false);
+  // --- Captions. Three independent facts, so three pieces of state rather than
+  // one "captions on" flag: whether this browser is *producing* them, whether
+  // the deployment *keeps* them, and whether it *translates* them.
+  const [captionConfig, setCaptionConfig] = useState<CaptionConfig | null>(
+    null,
+  );
+  const [captionsOn, setCaptionsOn] = useState(false);
+  // What this participant is speaking, and — for the overlay — which language
+  // they want on top. One control, because in practice they are the same
+  // person's answer to "which language am I in".
+  const [captionLang, setCaptionLang] = useState<"zh" | "en">("zh");
+  // The live track. Ephemeral by construction: it is never read back from the
+  // server and never survives a reload, exactly like awareness on the CRDT plane.
+  const [subtitles, setSubtitles] = useState<SubtitleLine[]>([]);
+  const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
+  const [summary, setSummary] = useState<MeetingSummary | null>(null);
   // Which side panel is showing. Chat is the default because it is the one
   // people keep open.
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("chat");
@@ -172,8 +218,17 @@ export default function App() {
     });
   }, []);
 
+  const applyMediaMode = useCallback((mode: "mesh" | "sfu") => {
+    mediaModeRef.current = mode;
+    setMediaMode(mode);
+  }, []);
+
   const clientRef = useRef<SignalingClient | null>(null);
   const roomRef = useRef<MediaRoom | null>(null);
+  /** Kept so a transport switch mid-meeting can rebuild without refetching. */
+  const mediaConfigRef = useRef<MediaConfig | null>(null);
+  /** What the media rooms report into. Rebuilt with them on a transport switch. */
+  const mediaEventsRef = useRef<WebRtcRoomEvents | null>(null);
   const selfIdRef = useRef<string>(crypto.randomUUID());
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
@@ -269,6 +324,13 @@ export default function App() {
     setTodos([]);
     setCalendar([]);
     setAgendaAvailable(false);
+    // Captions stop with the room. Leaving with the microphone still being
+    // transcribed would be the worst kind of surprise this feature could hold.
+    setCaptionsOn(false);
+    setSubtitles([]);
+    setTranscript([]);
+    setSummary(null);
+    setCaptionConfig(null);
     setMessages([]);
     setScreenSharing(false);
     setAudioEnabled(true);
@@ -277,6 +339,7 @@ export default function App() {
     setRaisedHands(new Set());
     setReactions([]);
     setRoomState({ host: "", locked: false });
+    applyMediaMode("mesh");
     setConnection("closed");
     joinedAsRef.current = null;
     mediaStateRef.current = { audio: true, video: true };
@@ -510,17 +573,85 @@ export default function App() {
     [authHeaders],
   );
 
+  /**
+   * What this deployment can do with speech, and what it has already kept.
+   *
+   * <p>Asked once on join rather than assumed. Recording needs a database and
+   * translation needs a language model, and a browser that guessed would either
+   * hide a working feature or promise one that is not there.
+   */
+  const loadCaptions = useCallback(
+    async (roomName: string) => {
+      const room = encodeURIComponent(roomName);
+      try {
+        const configRes = await fetch("/api/captions/config", {
+          headers: authHeaders(),
+        });
+        const config = configRes.ok
+          ? ((await configRes.json()) as CaptionConfig)
+          : null;
+        setCaptionConfig(config);
+        if (!config?.recording) {
+          setTranscript([]);
+          return;
+        }
+        const res = await fetch(`/api/captions/${room}`, {
+          headers: authHeaders(),
+        });
+        setTranscript(res.ok ? ((await res.json()) as TranscriptLine[]) : []);
+      } catch {
+        setCaptionConfig(null);
+        setTranscript([]);
+      }
+    },
+    [authHeaders],
+  );
+
+  /**
+   * Gets this meeting's summary, making one if it does not exist yet.
+   *
+   * <p>POST rather than GET even when only reading: the server decides whether a
+   * model call is needed, and two people opening the panel must not buy two
+   * summaries of the same hour. `regenerate` is the explicit override.
+   */
+  const summarizeMeeting = useCallback(
+    async (meetingId: number, regenerate: boolean) => {
+      const res = await fetch(
+        `/api/meetings/${encodeURIComponent(room)}/${meetingId}/summary` +
+          (regenerate ? "?regenerate=true" : ""),
+        { method: "POST", headers: authHeaders() },
+      );
+      if (!res.ok) {
+        // The server's reason, not a generic failure: "not enough transcript to
+        // summarise" is something the reader can act on, and hiding it behind
+        // "failed" would send them looking for a bug that is not there.
+        const body = (await res.json().catch(() => null)) as {
+          message?: string;
+        } | null;
+        throw new Error(body?.message ?? `產生摘要失敗(HTTP ${res.status})`);
+      }
+      setSummary((await res.json()) as MeetingSummary);
+    },
+    [room, authHeaders],
+  );
+
   /** The room's own history. Absent without the postgres profile, like the agenda. */
-  const loadMeetings = useCallback(async (roomName: string) => {
-    try {
-      const res = await fetch(`/api/meetings/${encodeURIComponent(roomName)}`, {
-        headers: authHeaders(),
-      })
-      setMeetings(res.ok ? ((await res.json()) as Meeting[]) : [])
-    } catch {
-      setMeetings([])
-    }
-  }, [authHeaders])
+  const loadMeetings = useCallback(
+    async (roomName: string) => {
+      try {
+        const res = await fetch(
+          `/api/meetings/${encodeURIComponent(roomName)}`,
+          {
+            headers: authHeaders(),
+          },
+        );
+        setMeetings(res.ok ? ((await res.json()) as Meeting[]) : []);
+      } catch {
+        setMeetings([]);
+      }
+    },
+    [authHeaders],
+  );
 
   /**
    * Downloads a meeting's record.
@@ -531,24 +662,24 @@ export default function App() {
    */
   const exportMeeting = useCallback(
     async (meeting: Meeting) => {
-      const roomName = joinedAsRef.current?.room ?? ''
+      const roomName = joinedAsRef.current?.room ?? "";
       const res = await fetch(
         `/api/meetings/${encodeURIComponent(roomName)}/${meeting.id}/export`,
         { headers: authHeaders() },
-      )
-      if (!res.ok) throw new Error(`匯出失敗(HTTP ${res.status})`)
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${roomName.replace(/[^A-Za-z0-9._-]/g, '-')}-${meeting.id}.md`
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(url)
+      );
+      if (!res.ok) throw new Error(`匯出失敗(HTTP ${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${roomName.replace(/[^A-Za-z0-9._-]/g, "-")}-${meeting.id}.md`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
     },
     [authHeaders],
-  )
+  );
 
   /**
    * Sends an agenda change and reloads. The list is refetched rather than
@@ -783,10 +914,17 @@ export default function App() {
         teardown();
         setError(`房間已滿(上限 ${msg.payload} 人),請換一個房間或稍後再試`);
       });
-      // Room meta: who hosts and whether newcomers are locked out.
-      client.on("room-state", (msg) =>
-        setRoomState(msg.payload as RoomStateInfo),
-      );
+      // Room meta: who hosts, whether newcomers are locked out, and which
+      // transport the room is on. The last one can change under us — a room
+      // that grows past the mesh limit is moved to the SFU — so this is also
+      // where a live transport switch begins.
+      client.on("room-state", (msg) => {
+        const state = msg.payload as RoomStateInfo;
+        setRoomState(state);
+        if (state.mediaMode && state.mediaMode !== mediaModeRef.current) {
+          void switchTransport(state.mediaMode);
+        }
+      });
       // Someone shared a file. The event carries it, but the list is refetched
       // so what is shown is the server's ordering, not an append guess.
       client.on("attachment", () => void loadFiles(room));
@@ -806,6 +944,57 @@ export default function App() {
             : [...current, item],
         );
         void loadAgenda(room);
+      });
+      // A subtitle line. Interim ones only ever reach the screen; a final one
+      // is also the transcript's newest row, so the panel gets it without a
+      // refetch — the server has already told us everything the fetch would.
+      client.on("caption", (msg) => {
+        const payload = msg.payload as CaptionPayload | undefined;
+        if (!payload?.text || !msg.from) return;
+        setSubtitles((lines) =>
+          applyCaption(
+            lines,
+            {
+              id: payload.id,
+              peerId: msg.from!,
+              speaker: payload.speaker ?? nameOf(msg.from!),
+              text: payload.text,
+              lang: payload.lang,
+              final: payload.final,
+            },
+            Date.now(),
+          ),
+        );
+        if (payload.final && payload.id !== undefined) {
+          const line: TranscriptLine = {
+            id: payload.id,
+            peerId: msg.from,
+            speaker: payload.speaker ?? nameOf(msg.from),
+            lang: payload.lang,
+            text: payload.text,
+            spokenAt: new Date(payload.spokenAt ?? Date.now()).toISOString(),
+          };
+          setTranscript((prev) =>
+            prev.some((l) => l.id === line.id) ? prev : [...prev, line],
+          );
+        }
+      });
+      // The translation, catching up with a line already on screen.
+      client.on("caption-translated", (msg) => {
+        const update = msg.payload as CaptionTranslatedPayload | undefined;
+        if (!update?.id) return;
+        setSubtitles((lines) => applyTranslation(lines, update));
+        setTranscript((prev) =>
+          prev.map((line) =>
+            line.id === update.id
+              ? {
+                  ...line,
+                  translation: update.translation,
+                  translationLang: update.translationLang,
+                }
+              : line,
+          ),
+        );
       });
       client.on("room-locked", () => {
         teardown();
@@ -866,42 +1055,26 @@ export default function App() {
         onQuality: (peerId: string, quality: PeerQuality) =>
           setPeerQuality((prev) => new Map(prev).set(peerId, quality)),
       };
+      mediaEventsRef.current = mediaEvents;
 
       const displayName =
         name.trim() || `訪客-${selfIdRef.current.slice(0, 4)}`;
       joinedAsRef.current = { room, displayName };
 
-      // The backend decides the media transport: SFU (LiveKit) when configured,
-      // else the built-in full mesh. Signaling is identical in both modes.
-      const media = await fetchMediaConfig(token);
-      setMediaMode(media.mode);
-      let mediaRoom: MediaRoom;
-      if (media.mode === "sfu") {
-        const lkToken = await fetchMediaToken(
-          room,
-          selfIdRef.current,
-          displayName,
-          token,
-        );
-        mediaRoom = new SfuRoom(
-          client,
-          selfIdRef.current,
-          stream,
-          mediaEvents,
-          {
-            url: resolveLivekitUrl(media.livekitUrl),
-            token: lkToken,
-          },
-        );
-      } else {
-        mediaRoom = new WebRtcRoom(
-          client,
-          selfIdRef.current,
-          stream,
-          mediaEvents,
-          media.iceServers?.length ? media.iceServers : undefined,
-        );
-      }
+      // The backend decides the media transport for THIS room: the full mesh
+      // while it is small, the SFU once it outgrows one. Signaling is identical
+      // in both, which is what makes changing transport mid-meeting possible.
+      const media = await fetchMediaConfig(token, room);
+      mediaConfigRef.current = media;
+      applyMediaMode(media.mode);
+      const mediaRoom = await buildMediaRoom(
+        media.mode,
+        client,
+        stream,
+        mediaEvents,
+        room,
+        displayName,
+      );
       roomRef.current = mediaRoom;
       mediaRoom.join(room, displayName);
       setStatus("in-room");
@@ -909,6 +1082,7 @@ export default function App() {
       void loadFiles(room);
       void loadAgenda(room);
       void loadMeetings(room);
+      void loadCaptions(room);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStatus("error");
@@ -923,6 +1097,7 @@ export default function App() {
     loadRecordings,
     loadFiles,
     loadAgenda,
+    loadCaptions,
   ]);
 
   const leave = useCallback(() => {
@@ -1001,6 +1176,9 @@ export default function App() {
     if (status === "in-room" && agendaAvailable) {
       panels.push({ id: "agenda", label: "議程" });
     }
+    if (status === "in-room" && captionConfig?.recording) {
+      panels.push({ id: "transcript", label: "逐字稿" });
+    }
     if (status === "in-room" && meetings.length > 0) {
       panels.push({ id: "meetings", label: "紀錄" });
     }
@@ -1012,7 +1190,222 @@ export default function App() {
       panels.push({ id: "files", label: "檔案" });
     panels.push({ id: "chat", label: "聊天" });
     return panels;
-  }, [status, recordings.length, fileSharingAvailable, agendaAvailable, meetings.length]);
+  }, [
+    status,
+    recordings.length,
+    fileSharingAvailable,
+    agendaAvailable,
+    meetings.length,
+    captionConfig?.recording,
+  ]);
+
+  /**
+   * Which recognition locale the chosen track speaks.
+   *
+   * <p>From the server rather than hardcoded: `cmn-Hant-TW` is what Chrome wants
+   * for Taiwanese Mandarin, and which variety a deployment recognises is its
+   * decision, not the browser's.
+   */
+  const recognitionLang =
+    captionConfig?.languages.find((l) => l.track === captionLang)
+      ?.recognition ?? (captionLang === "zh" ? "cmn-Hant-TW" : "en-US");
+
+  /**
+   * Sends one line of recognition to the room.
+   *
+   * <p>The speaker's own line is rendered here rather than waiting for it to
+   * come back: it is already on their screen before the socket has finished
+   * carrying it, which is the difference between a subtitle and a delay. The
+   * server's echo of the final line arrives afterwards carrying the id, and
+   * `applyCaption` merges the two rather than showing them both.
+   */
+  const sendCaption = useCallback(
+    (chunk: { text: string; final: boolean }) => {
+      const payload: CaptionPayload = {
+        text: chunk.text,
+        lang: recognitionLang,
+        final: chunk.final,
+        spokenAt: Date.now(),
+      };
+      clientRef.current?.send({
+        type: "caption",
+        room,
+        from: selfIdRef.current,
+        payload,
+      });
+      setSubtitles((lines) =>
+        applyCaption(
+          lines,
+          {
+            peerId: selfIdRef.current,
+            speaker: `${name.trim() || "你"}(你)`,
+            text: chunk.text,
+            lang: recognitionLang,
+            final: chunk.final,
+          },
+          Date.now(),
+        ),
+      );
+    },
+    [room, name, recognitionLang],
+  );
+
+  const { error: captionError, supported: captionsSupported } =
+    useSpeechCaptions({
+      enabled: captionsOn && status === "in-room",
+      lang: recognitionLang,
+      onChunk: sendCaption,
+    });
+
+  /**
+   * Refreshes the meeting list when a panel that reads it is opened.
+   *
+   * <p>The list is also fetched on join, and that fetch races the join itself:
+   * the meeting row is opened by the server when this very participant arrives,
+   * so the first person into a room could get an empty list and keep it for the
+   * whole meeting — no 紀錄 tab, and a 產生摘要 button disabled because there was
+   * no meeting to summarise. Reading it when somebody actually looks is both the
+   * fix and what a person expects a panel to do.
+   */
+  useEffect(() => {
+    if (status !== "in-room") return;
+    if (sidebarTab !== "transcript" && sidebarTab !== "meetings") return;
+    void loadMeetings(room);
+  }, [status, sidebarTab, room, loadMeetings]);
+
+  /**
+   * Ages lines off the subtitle track.
+   *
+   * <p>A tick rather than a timer per line. Lines expire on a clock nobody is
+   * otherwise driving — the last speaker's sentence has to disappear on its own
+   * — and one interval that prunes is far less machinery than a timeout chasing
+   * each line. It runs only while there is something on screen.
+   */
+  useEffect(() => {
+    if (subtitles.length === 0) return;
+    const timer = setInterval(
+      () => setSubtitles((lines) => prune(lines, Date.now())),
+      1000,
+    );
+    return () => clearInterval(timer);
+  }, [subtitles.length]);
+
+  const shownSubtitles = useMemo(
+    () => visible(subtitles, Date.now()),
+    // The tick above rewrites `subtitles` when anything expires, so this
+    // recomputes then too — no separate clock needed here.
+    [subtitles],
+  );
+
+  /**
+   * Builds the media room for a transport.
+   *
+   * <p>Both transports take the same signaling client, the same local stream and
+   * the same event sink, which is what makes swapping one for the other a
+   * possibility rather than a rewrite: only the media plane changes, and chat,
+   * notes, the agenda and the captions never notice.
+   */
+  const buildMediaRoom = useCallback(
+    async (
+      mode: "mesh" | "sfu",
+      client: SignalingClient,
+      stream: MediaStream,
+      events: WebRtcRoomEvents,
+      roomName: string,
+      displayName: string,
+    ): Promise<MediaRoom> => {
+      const config = mediaConfigRef.current;
+      if (mode === "sfu") {
+        const lkToken = await fetchMediaToken(
+          roomName,
+          selfIdRef.current,
+          displayName,
+          token,
+        );
+        return new SfuRoom(client, selfIdRef.current, stream, events, {
+          url: resolveLivekitUrl(config?.livekitUrl ?? ""),
+          token: lkToken,
+        });
+      }
+      return new WebRtcRoom(
+        client,
+        selfIdRef.current,
+        stream,
+        events,
+        config?.iceServers?.length ? config.iceServers : undefined,
+      );
+    },
+    [token],
+  );
+
+  /**
+   * Moves this participant onto the transport the room has switched to.
+   *
+   * <p>The room grew past what a mesh can carry and the server said so. What
+   * happens here is a teardown and a rebuild of the media plane only — the
+   * signaling socket stays up throughout, so membership, chat, the shared notes
+   * and the captions all continue across the switch. What people see is their
+   * video tiles blink; what they do not see is a reconnect.
+   *
+   * <p>The local stream is deliberately reused rather than reacquired. Asking
+   * getUserMedia again mid-meeting risks a second permission prompt and, on some
+   * platforms, a device that is briefly busy — for a change nobody asked for.
+   */
+  const switchTransport = useCallback(
+    async (mode: "mesh" | "sfu") => {
+      const client = clientRef.current;
+      const stream = cameraStreamRef.current ?? screenStreamRef.current;
+      const events = mediaEventsRef.current;
+      const joined = joinedAsRef.current;
+      if (!client || !stream || !events || !joined) return;
+
+      try {
+        // Refetched, because the SFU half of the config — the LiveKit URL — is
+        // only populated where an SFU exists, and a room that started on the
+        // mesh may have been told nothing about it.
+        mediaConfigRef.current = await fetchMediaConfig(token, joined.room);
+        roomRef.current?.leave(joined.room);
+        // Remote tiles belong to the old transport. Left in place they would
+        // hang as frozen frames until each peer happened to republish.
+        setRemoteStreams(new Map());
+        const next = await buildMediaRoom(
+          mode,
+          client,
+          stream,
+          events,
+          joined.room,
+          joined.displayName,
+        );
+        roomRef.current = next;
+        next.join(joined.room, joined.displayName);
+        applyMediaMode(mode);
+      } catch (e) {
+        setError(
+          e instanceof Error
+            ? `切換視訊傳輸失敗:${e.message}`
+            : "切換視訊傳輸失敗",
+        );
+      }
+    },
+    [token, buildMediaRoom],
+  );
+
+  /**
+   * Puts one line through the agenda's own capture grammar.
+   *
+   * <p>An action item lifted out of a summary is exactly what somebody would
+   * have typed into the capture line, so it is parsed the same way rather than
+   * posted straight to the API — the `@owner` reaches the to-do list by the one
+   * path that has always handled owners, and nothing new can disagree with it.
+   */
+  const addCapturedLine = useCallback(
+    (line: string) => {
+      const captured = parseCapture(line);
+      if (!captured.text.trim()) return;
+      void addAgendaItem(captured);
+    },
+    [addAgendaItem],
+  );
 
   /** Host only: lock or unlock the room to newcomers (server re-validates). */
   const toggleLock = useCallback(() => {
@@ -1178,6 +1571,55 @@ export default function App() {
                 {recordingId ? "🔴 停止錄影" : "錄影"}
               </button>
             )}
+            {/* Offered only where it could work. Speech recognition is a
+                Chrome-family API, and a button that silently does nothing is
+                worse than a button that is not there. */}
+            {captionsSupported && (
+              <span className="caption-control">
+                <button
+                  className="btn-secondary"
+                  aria-pressed={captionsOn}
+                  onClick={() => setCaptionsOn((on) => !on)}
+                >
+                  {captionsOn ? "💬 關閉字幕" : "💬 開啟字幕"}
+                </button>
+                <label className="caption-control__lang">
+                  <span className="visually-hidden">字幕語言</span>
+                  <select
+                    value={captionLang}
+                    onChange={(e) =>
+                      setCaptionLang(e.target.value as "zh" | "en")
+                    }
+                  >
+                    {(
+                      captionConfig?.languages ?? [
+                        {
+                          track: "zh" as const,
+                          label: "中文",
+                          recognition: "",
+                        },
+                        {
+                          track: "en" as const,
+                          label: "English",
+                          recognition: "",
+                        },
+                      ]
+                    ).map((lang) => (
+                      <option key={lang.track} value={lang.track}>
+                        {lang.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {/* Beside the control that caused it. A permission refusal shown
+                    as a page-level error reads as the room being broken. */}
+                {captionError && (
+                  <span className="caption-control__error" role="alert">
+                    {captionError}
+                  </span>
+                )}
+              </span>
+            )}
             {isHost && (
               <button className="btn-secondary" onClick={toggleLock}>
                 {roomState.locked ? "🔓 解除鎖定" : "🔒 鎖定房間"}
@@ -1224,7 +1666,9 @@ export default function App() {
             {due.map((item) => (
               <li key={`${item.kind}:${item.id}`} className="due__item">
                 {item.text}
-                {item.assignee && <span className="chip chip--who">@{item.assignee}</span>}
+                {item.assignee && (
+                  <span className="chip chip--who">@{item.assignee}</span>
+                )}
               </li>
             ))}
           </ul>
@@ -1288,27 +1732,34 @@ export default function App() {
               </button>
             </div>
           )}
-          <div className="video-grid">
-            {localStream && (
-              <VideoTile
-                label={`${name.trim() || "你"}(你${screenSharing ? "・分享中" : ""})`}
-                stream={localStream}
-                muted
-                audioOff={!audioEnabled}
-                videoOff={!videoEnabled && !screenSharing}
-                handRaised={handRaised}
-              />
+          <div className="video-area">
+            <div className="video-grid">
+              {localStream && (
+                <VideoTile
+                  label={`${name.trim() || "你"}(你${screenSharing ? "・分享中" : ""})`}
+                  stream={localStream}
+                  muted
+                  audioOff={!audioEnabled}
+                  videoOff={!videoEnabled && !screenSharing}
+                  handRaised={handRaised}
+                />
+              )}
+              {[...remoteStreams].map(([peerId, stream]) => (
+                <VideoTile
+                  key={peerId}
+                  label={nameOf(peerId)}
+                  stream={stream}
+                  audioOff={peerStates.get(peerId)?.audio === false}
+                  videoOff={peerStates.get(peerId)?.video === false}
+                  handRaised={raisedHands.has(peerId)}
+                />
+              ))}
+            </div>
+            {/* With the video, not beside it: a subtitle is read while looking at
+              the person speaking, and a sidebar panel would make that a choice. */}
+            {status === "in-room" && (
+              <CaptionOverlay lines={shownSubtitles} prefer={captionLang} />
             )}
-            {[...remoteStreams].map(([peerId, stream]) => (
-              <VideoTile
-                key={peerId}
-                label={nameOf(peerId)}
-                stream={stream}
-                audioOff={peerStates.get(peerId)?.audio === false}
-                videoOff={peerStates.get(peerId)?.video === false}
-                handRaised={raisedHands.has(peerId)}
-              />
-            ))}
           </div>
         </div>
         <WorkspaceDivider
@@ -1333,6 +1784,7 @@ export default function App() {
               id="panel-members"
               role="tabpanel"
               aria-labelledby="tab-members"
+              hidden={sidebarTab !== "members"}
             >
               <MemberList
                 members={members}
@@ -1350,6 +1802,7 @@ export default function App() {
               id="panel-agenda"
               role="tabpanel"
               aria-labelledby="tab-agenda"
+              hidden={sidebarTab !== "agenda"}
             >
               <AgendaPanel
                 todos={todos}
@@ -1361,6 +1814,25 @@ export default function App() {
               />
             </div>
           )}
+          {status === "in-room" && captionConfig?.recording && (
+            <div
+              className="sidebar__panel"
+              data-panel="transcript"
+              id="panel-transcript"
+              role="tabpanel"
+              aria-labelledby="tab-transcript"
+              hidden={sidebarTab !== "transcript"}
+            >
+              <TranscriptPanel
+                lines={transcript}
+                meetings={meetings}
+                summary={summary}
+                canSummarize={captionConfig.summary}
+                onSummarize={summarizeMeeting}
+                onAddTask={addCapturedLine}
+              />
+            </div>
+          )}
           {status === "in-room" && meetings.length > 0 && (
             <div
               className="sidebar__panel"
@@ -1368,6 +1840,7 @@ export default function App() {
               id="panel-meetings"
               role="tabpanel"
               aria-labelledby="tab-meetings"
+              hidden={sidebarTab !== "meetings"}
             >
               <MeetingsPanel meetings={meetings} onExport={exportMeeting} />
             </div>
@@ -1379,6 +1852,7 @@ export default function App() {
               id="panel-recordings"
               role="tabpanel"
               aria-labelledby="tab-recordings"
+              hidden={sidebarTab !== "recordings"}
             >
               <RecordingsPanel
                 recordings={recordings}
@@ -1394,6 +1868,7 @@ export default function App() {
               id="panel-search"
               role="tabpanel"
               aria-labelledby="tab-search"
+              hidden={sidebarTab !== "search"}
             >
               <SearchPanel onSearch={searchMessages} />
             </div>
@@ -1405,6 +1880,7 @@ export default function App() {
               id="panel-files"
               role="tabpanel"
               aria-labelledby="tab-files"
+              hidden={sidebarTab !== "files"}
             >
               <FilesPanel
                 files={files}
@@ -1415,12 +1891,13 @@ export default function App() {
             </div>
           )}
           <div
-              className="sidebar__panel"
-              data-panel="chat"
-              id="panel-chat"
-              role="tabpanel"
-              aria-labelledby="tab-chat"
-            >
+            className="sidebar__panel"
+            data-panel="chat"
+            id="panel-chat"
+            role="tabpanel"
+            aria-labelledby="tab-chat"
+            hidden={sidebarTab !== "chat"}
+          >
             <ChatPanel
               messages={messages.map((m) => ({
                 id: m.id,

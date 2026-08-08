@@ -38,12 +38,16 @@ public interface Backplane {
 
     /**
      * A room's cluster-wide meta state: the current host (the peer that opened the
-     * room, handed over to a remaining member when the host leaves) and whether
-     * the room is locked to newcomers. Lives and dies with the room — the state
-     * of an empty room is {@link #EMPTY}.
+     * room, handed over to a remaining member when the host leaves), whether the
+     * room is locked to newcomers, and whether it has outgrown the mesh. Lives and
+     * dies with the room — the state of an empty room is {@link #EMPTY}.
+     *
+     * @param sfu the room has passed the mesh limit and its media now goes through
+     *            the SFU. A latch: once set it stays set for the life of the room
+     *            (see {@link #markSfu}).
      */
-    record RoomState(String hostId, boolean locked) {
-        public static final RoomState EMPTY = new RoomState(null, false);
+    record RoomState(String hostId, boolean locked, boolean sfu) {
+        public static final RoomState EMPTY = new RoomState(null, false, false);
     }
 
     /** The room's current meta state ({@link RoomState#EMPTY} if the room is empty). */
@@ -54,6 +58,22 @@ public interface Backplane {
      * responsibility — the backplane only stores cluster-wide state.
      */
     void setLocked(String room, boolean locked);
+
+    /**
+     * Latches the room onto the SFU, for good.
+     *
+     * <p>Deliberately one-way. A room that drops from nine people back to eight
+     * <em>could</em> return to the mesh, and must not: switching transport costs
+     * every participant a renegotiation, so a room hovering around the limit
+     * would spend the meeting tearing its media down and building it again. The
+     * upgrade is paid once; the latch clears when the room empties, along with
+     * the rest of its state.
+     *
+     * <p>Being monotonic is also why this needs no atomicity of its own, unlike
+     * the capacity decision: concurrent callers can only ever set it to the same
+     * value.
+     */
+    void markSfu(String room);
 
     /**
      * Atomically registers a peer (hosted on this node) in the cluster directory,

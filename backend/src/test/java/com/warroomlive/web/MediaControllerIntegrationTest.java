@@ -24,11 +24,41 @@ class MediaControllerIntegrationTest {
     @Autowired
     private TestRestTemplate rest;
 
+    @Autowired
+    private com.warroomlive.signaling.Backplane backplane;
+
     @Test
     @SuppressWarnings("unchecked")
-    void configReportsSfuModeWhenLivekitConfigured() {
+    void aSmallRoomStaysOnTheMeshEvenWhereAnSfuExists() {
+        // The mode is a property of the room, not of the deployment. Having an
+        // SFU available does not mean four people should be routed through it —
+        // for a handful of participants a direct connection is the fastest path
+        // there is, and the SFU only earns its hop once the room outgrows one.
+        Map<String, Object> config = rest.getForObject("/api/media/config?room=small", Map.class);
+        assertThat(config)
+                .containsEntry("mode", "mesh")
+                .containsEntry("sfuAvailable", true)
+                .containsEntry("meshMaxPeers", 8)
+                .containsEntry("livekitUrl", "/livekit");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void aRoomThatHasOutgrownTheMeshIsPutStraightOnTheSfu() {
+        // A joiner arriving at a room that already switched must not negotiate a
+        // mesh it is about to be moved off.
+        backplane.tryRegister("big", "someone", "Someone", null, 50);
+        backplane.markSfu("big");
+
+        Map<String, Object> config = rest.getForObject("/api/media/config?room=big", Map.class);
+        assertThat(config).containsEntry("mode", "sfu");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void theLobbyCanAskWhatTheDeploymentCanDoWithoutNamingARoom() {
         Map<String, Object> config = rest.getForObject("/api/media/config", Map.class);
-        assertThat(config).containsEntry("mode", "sfu").containsEntry("livekitUrl", "/livekit");
+        assertThat(config).containsEntry("mode", "mesh").containsEntry("sfuAvailable", true);
     }
 
     @Test

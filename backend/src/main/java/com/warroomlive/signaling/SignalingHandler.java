@@ -1,12 +1,15 @@
 package com.warroomlive.signaling;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.warroomlive.chat.ChatRepository;
 import com.warroomlive.config.WebSocketConfig;
 import com.warroomlive.chat.StoredMessage;
 import com.warroomlive.events.OutboxRecorder;
 import com.warroomlive.limits.RateLimiter;
 import com.warroomlive.meetings.MeetingTracker;
+import com.warroomlive.transcript.TranscriptRecorder;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
@@ -20,6 +23,8 @@ import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorato
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -50,9 +55,16 @@ public class SignalingHandler extends TextWebSocketHandler {
     private final ObjectProvider<OutboxRecorder> outbox;
     /** Present only under the postgres profile; meetings go untracked without it. */
     private final ObjectProvider<MeetingTracker> meetings;
+    /** Present only under the postgres profile; captions still relay, they are just not kept. */
+    private final ObjectProvider<TranscriptRecorder> transcripts;
     private final int maxRoomSize;
     private final int historyLimit;
     private final int maxChatLength;
+    private final int maxCaptionLength;
+    /** Above this many participants a room moves to the SFU; 0 disables the mesh entirely. */
+    private final int meshMaxPeers;
+    /** Whether there is an SFU to switch to at all. */
+    private final boolean sfuAvailable;
     private final RateLimiter rateLimiter;
 
     /** Wraps raw sessions so concurrent sends from multiple peers are serialized safely. */
@@ -69,21 +81,30 @@ public class SignalingHandler extends TextWebSocketHandler {
             ChatRepository chat,
             ObjectProvider<OutboxRecorder> outbox,
             ObjectProvider<MeetingTracker> meetings,
+            ObjectProvider<TranscriptRecorder> transcripts,
             MeterRegistry metrics,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-room-size:8}") int maxRoomSize,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.history-limit:100}") int historyLimit,
             @org.springframework.beans.factory.annotation.Value("${warroomlive.signaling.max-messages-per-second:60}") int maxMessagesPerSecond,
-            @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.max-length:4000}") int maxChatLength) {
+            @org.springframework.beans.factory.annotation.Value("${warroomlive.chat.max-length:4000}") int maxChatLength,
+            @org.springframework.beans.factory.annotation.Value("${warroomlive.captions.max-length:1000}") int maxCaptionLength,
+            @org.springframework.beans.factory.annotation.Value("${warroomlive.media.mesh-max-peers:8}") int meshMaxPeers,
+            @org.springframework.beans.factory.annotation.Value("${warroomlive.media.livekit-url:}") String livekitUrl,
+            @org.springframework.beans.factory.annotation.Value("${warroomlive.media.livekit-api-key:}") String livekitApiKey) {
         this.rooms = rooms;
         this.backplane = backplane;
         this.mapper = mapper;
         this.chat = chat;
         this.outbox = outbox;
         this.meetings = meetings;
+        this.transcripts = transcripts;
         this.metrics = metrics;
         this.maxRoomSize = maxRoomSize;
         this.historyLimit = historyLimit;
         this.maxChatLength = maxChatLength;
+        this.maxCaptionLength = maxCaptionLength;
+        this.meshMaxPeers = meshMaxPeers;
+        this.sfuAvailable = !livekitUrl.isBlank() && !livekitApiKey.isBlank();
         this.rateLimiter = new RateLimiter(maxMessagesPerSecond);
         metrics.gauge("warroomlive.signaling.connections.active", connectionsActive);
         this.processingTimer = Timer.builder("warroomlive.signaling.message.processing")
@@ -169,6 +190,7 @@ public class SignalingHandler extends TextWebSocketHandler {
             case SignalMessage.TYPE_CHAT -> handleChat(session, msg);
             case SignalMessage.TYPE_STATE, SignalMessage.TYPE_REACTION, SignalMessage.TYPE_HAND ->
                     broadcastToRoom(session, msg);
+            case SignalMessage.TYPE_CAPTION -> handleCaption(session, msg);
             case SignalMessage.TYPE_LOCK -> handleLock(session, msg);
             case SignalMessage.TYPE_KICK -> handleKick(session, msg);
             case SignalMessage.TYPE_LEAVE -> handleLeave(session);
@@ -233,7 +255,12 @@ public class SignalingHandler extends TextWebSocketHandler {
                 SignalMessage.TYPE_PEERS, msg.room(), null, msg.from(),
                 mapper.valueToTree(existingPeers)));
 
-        // Tell the newcomer the room's meta state (who hosts, locked flag).
+        // Has this arrival taken the room past what a mesh can carry? Decided
+        // before the newcomer is told the mode, so it is never handed a "mesh"
+        // it is about to be told to abandon.
+        switchToSfuIfOutgrown(msg.room(), msg.from(), memberCount);
+
+        // Tell the newcomer the room's meta state (host, locked, transport).
         send(session, roomStateMessage(msg.room(), backplane.roomState(msg.room())));
 
         // Replay the room's recent chat so a refreshed or newly-joined peer has context.
@@ -308,6 +335,104 @@ public class SignalingHandler extends TextWebSocketHandler {
                 msg.from(), name, text, System.currentTimeMillis()));
         rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, msg));
         backplane.publishToRoom(msg.room(), msg.from(), msg);
+    }
+
+    /**
+     * A live subtitle line.
+     *
+     * <p>Two paths through one message type, split on {@code final}:
+     *
+     * <ul>
+     *   <li><strong>interim</strong> — recognition's running guess, arriving
+     *       several times a second and replaced each time. Relayed and forgotten.
+     *       Never stored, never translated: it is a sentence nobody has finished
+     *       saying, and paying a model to translate a draft that is about to be
+     *       replaced would cost real money to produce a subtitle that flickers.</li>
+     *   <li><strong>final</strong> — the settled utterance. Recorded, given an
+     *       id, and broadcast <em>with</em> that id so the translation arriving
+     *       later can be matched to the line already on screen.</li>
+     * </ul>
+     *
+     * <p>The broadcast does not wait for the translation. That is the whole
+     * point: a caption that appears when the model is done is not a caption.
+     */
+    private void handleCaption(WebSocketSession session, SignalMessage msg) {
+        if (isBlank(msg.room()) || isBlank(msg.from()) || msg.payload() == null) {
+            sendError(session, msg.room(), "caption requires 'room', 'from' and 'payload'");
+            return;
+        }
+        String text = msg.payload().path("text").asText("");
+        if (text.isBlank()) {
+            return;
+        }
+        // Bounded like chat, and for the same reason: a final line reaches
+        // durable storage. Truncated rather than rejected, unlike chat — a
+        // speaker cannot retype what they said, and half a sentence of subtitle
+        // is worth more than an error nobody in a meeting is going to read.
+        if (text.length() > maxCaptionLength) {
+            text = text.substring(0, maxCaptionLength);
+            countIn("caption-truncated");
+        }
+        boolean isFinal = msg.payload().path("final").asBoolean(false);
+        String lang = msg.payload().path("lang").asText("");
+        String speaker = rooms.nameOf(msg.room(), msg.from()).orElse(msg.from());
+
+        final SignalMessage out = isFinal
+                ? recordAndStamp(msg, text, lang, speaker)
+                : msg;
+
+        if (isFinal && out != msg) {
+            // Echoed to the speaker too, uniquely among broadcasts. They rendered
+            // this line themselves the moment they said it, from their own
+            // recognizer — but only the server knows its id, and without it the
+            // speaker's own translation would arrive keyed to a line they cannot
+            // identify.
+            send(session, out);
+        }
+        rooms.othersIn(msg.room(), msg.from()).forEach(other -> send(other, out));
+        backplane.publishToRoom(msg.room(), msg.from(), out);
+    }
+
+    /**
+     * Records a final line and returns the message to broadcast, stamped with its
+     * id — or the original message unchanged when there is nothing recording.
+     *
+     * <p>Returning the input identically is the signal that no id exists, which
+     * the caller uses to decide whether the speaker needs an echo.
+     */
+    private SignalMessage recordAndStamp(SignalMessage msg, String text, String lang,
+            String speaker) {
+        TranscriptRecorder recorder = transcripts.getIfAvailable();
+        if (recorder == null || !msg.payload().isObject()) {
+            return msg;
+        }
+        Optional<Long> id = recorder.record(msg.room(), msg.from(), speaker, lang, text,
+                spokenAt(msg.payload()));
+        if (id.isEmpty()) {
+            return msg;
+        }
+        ObjectNode payload = ((ObjectNode) msg.payload()).deepCopy();
+        payload.put("id", id.get());
+        // Re-stated rather than assumed: the text may have been truncated, and
+        // the speaker's name is the server's to assert, not the client's to claim.
+        payload.put("text", text);
+        payload.put("speaker", speaker);
+        return new SignalMessage(msg.type(), msg.room(), msg.from(), null, payload);
+    }
+
+    /**
+     * The speaker's clock, when it is offered and sane.
+     *
+     * <p>A client's clock is not trusted beyond a day either side of the
+     * server's: a machine set to 2011 would otherwise file its lines outside
+     * every meeting window and vanish from the transcript it belongs to.
+     */
+    private static Instant spokenAt(JsonNode payload) {
+        Instant now = Instant.now();
+        long millis = payload.path("spokenAt").asLong(0);
+        if (millis <= 0) return now;
+        Instant claimed = Instant.ofEpochMilli(millis);
+        return Math.abs(Duration.between(claimed, now).toHours()) > 24 ? now : claimed;
     }
 
     /** Fans an ephemeral message (media state, reaction, hand) out to the rest of the room. */
@@ -405,11 +530,64 @@ public class SignalingHandler extends TextWebSocketHandler {
         }
     }
 
+    /**
+     * The room's meta state as the clients see it.
+     *
+     * <p>The media transport rides here rather than in a message type of its
+     * own. It is a property of the room that every joiner needs and that
+     * everybody must be told about when it changes — which is the exact
+     * description of this message, and re-deriving that machinery under a second
+     * name would only create a way for the two to disagree.
+     */
     private SignalMessage roomStateMessage(String room, Backplane.RoomState state) {
         return new SignalMessage(SignalMessage.TYPE_ROOM_STATE, room, null, null,
                 mapper.valueToTree(Map.of(
                         "host", state.hostId() == null ? "" : state.hostId(),
-                        "locked", state.locked())));
+                        "locked", state.locked(),
+                        "mediaMode", mediaMode(state))));
+    }
+
+    /**
+     * Which transport a room is on.
+     *
+     * <p>Mesh is the default because for a handful of people it is the lowest
+     * latency path there is — nothing between the two browsers. It stops being
+     * the right answer as the room grows: every participant uploads their video
+     * once per peer, so the ninth arrival is asking everyone to send eight
+     * copies. Past that point the SFU earns its hop.
+     *
+     * <p>An SFU that is not deployed cannot be switched to, so a room over the
+     * limit without one stays on the mesh — which is why the hard capacity cap
+     * exists and stays at the mesh limit in that deployment.
+     */
+    private String mediaMode(Backplane.RoomState state) {
+        return state.sfu() && sfuAvailable ? "sfu" : "mesh";
+    }
+
+    /**
+     * Moves the room onto the SFU once it outgrows the mesh, and tells everyone.
+     *
+     * <p>Called after a join has been accepted, so {@code memberCount} is the
+     * room's real cluster-wide size. The latch means this fires once per meeting
+     * rather than on every join past the limit.
+     */
+    private void switchToSfuIfOutgrown(String room, String joinerId, int memberCount) {
+        if (!sfuAvailable || meshMaxPeers <= 0 || memberCount <= meshMaxPeers) {
+            return;
+        }
+        if (backplane.roomState(room).sfu()) {
+            return;
+        }
+        backplane.markSfu(room);
+        log.info("Room {} outgrew the mesh at {} participants; switching to the SFU",
+                room, memberCount);
+        metrics.counter("warroomlive.media.mode.switched", "to", "sfu").increment();
+        // Everyone except the arrival that tipped it over — it is already in the
+        // room by now, and the join sequence sends it the room state a few lines
+        // below. Broadcasting to it as well would tell it the same thing twice.
+        SignalMessage state = roomStateMessage(room, backplane.roomState(room));
+        rooms.othersIn(room, joinerId).forEach(other -> send(other, state));
+        backplane.publishToRoom(room, joinerId, state);
     }
 
     private void handleLeave(WebSocketSession session) {

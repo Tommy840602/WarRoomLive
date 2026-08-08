@@ -10,6 +10,9 @@ import com.warroomlive.chat.ChatRepository;
 import com.warroomlive.chat.StoredMessage;
 import com.warroomlive.recordings.RecordingEntity;
 import com.warroomlive.recordings.RecordingStore;
+import com.warroomlive.transcript.SummaryStore;
+import com.warroomlive.transcript.TranscriptLineEntity;
+import com.warroomlive.transcript.TranscriptStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -66,18 +69,24 @@ public class MeetingExporter {
     private final ObjectProvider<CalendarStore> calendar;
     private final ObjectProvider<AttachmentStore> attachments;
     private final ObjectProvider<RecordingStore> recordings;
+    private final ObjectProvider<TranscriptStore> transcripts;
+    private final ObjectProvider<SummaryStore> summaries;
     private final RestClient http;
     private final String collabUrl;
 
     public MeetingExporter(ChatRepository chat, ObjectProvider<TodoStore> todos,
             ObjectProvider<CalendarStore> calendar, ObjectProvider<AttachmentStore> attachments,
             ObjectProvider<RecordingStore> recordings,
+            ObjectProvider<TranscriptStore> transcripts,
+            ObjectProvider<SummaryStore> summaries,
             @Value("${warroomlive.collab.internal-url:http://collab:1234}") String collabUrl) {
         this.chat = chat;
         this.todos = todos;
         this.calendar = calendar;
         this.attachments = attachments;
         this.recordings = recordings;
+        this.transcripts = transcripts;
+        this.summaries = summaries;
         this.collabUrl = collabUrl;
         // HTTP/1.1, explicitly. Java's HttpClient defaults to offering an h2c
         // upgrade on plaintext, and the collab service is a WebSocket server:
@@ -106,13 +115,64 @@ public class MeetingExporter {
         }
         out.append("- 尖峰人數:").append(meeting.participantPeak()).append("\n\n");
 
+        // Summary first, transcript last. The document is read by somebody who
+        // was not there, and the order they need it in is conclusions, then
+        // context, then — only if they are checking something — the words.
+        appendSummary(out, meeting);
         appendChat(out, room, meeting.startedAt(), end);
         appendAgenda(out, room);
         appendNotes(out, room);
         appendAttachments(out, room, meeting.startedAt(), end);
         appendRecordings(out, room, meeting.startedAt(), end);
+        appendTranscript(out, room, meeting.startedAt(), end);
 
         return out.toString();
+    }
+
+    /**
+     * The summary, if one was ever made — never made here.
+     *
+     * <p>Exporting must not be able to spend money or call a model. Somebody
+     * downloading a record expects a download, and a summary that appeared
+     * because a document was exported would also mean two people exporting the
+     * same meeting could get two different summaries of it.
+     */
+    private void appendSummary(StringBuilder out, MeetingEntity meeting) {
+        SummaryStore store = summaries.getIfAvailable();
+        if (store == null || meeting.id() == null) return;
+        store.find(meeting.room(), meeting.id()).ifPresent(summary -> {
+            out.append("## 重點摘要\n\n");
+            out.append(summary.getSummaryMd().strip()).append("\n\n");
+            // Attributed, and quietly. A summary is a model's reading of the
+            // meeting, and the reader is entitled to know that before quoting it.
+            out.append("> 由 ").append(summary.getModel()).append(" 從 ")
+                    .append(summary.getLineCount()).append(" 句逐字稿產生於 ")
+                    .append(STAMP.format(summary.getGeneratedAt())).append(" UTC。\n\n");
+        });
+    }
+
+    /**
+     * The transcript, windowed to the meeting like the chat is.
+     *
+     * <p>Both languages when both exist, the translation indented under the
+     * original: the original is what was said and the translation is a reading
+     * of it, and a record that presents them as equals loses which was which.
+     */
+    private void appendTranscript(StringBuilder out, String room, Instant from, Instant to) {
+        TranscriptStore store = transcripts.getIfAvailable();
+        if (store == null) return;
+        List<TranscriptLineEntity> lines = store.window(room, from, to, MAX_MESSAGES);
+        if (lines.isEmpty()) return;
+        out.append("## 逐字稿\n\n");
+        for (TranscriptLineEntity line : lines) {
+            out.append("- `").append(CLOCK.format(line.getSpokenAt())).append("` **")
+                    .append(line.getSpeaker()).append("**:")
+                    .append(oneLine(line.getText())).append('\n');
+            if (line.getTranslation() != null) {
+                out.append("  - *").append(oneLine(line.getTranslation())).append("*\n");
+            }
+        }
+        out.append('\n');
     }
 
     /** Windowed: a message carries its own time, so "during this meeting" is answerable. */

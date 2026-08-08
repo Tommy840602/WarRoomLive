@@ -47,6 +47,27 @@ warroomlive:
     # caller declares, and at confirmation, against what actually landed.
     public-prefix: ${ATTACHMENT_PATH_PREFIX:/objects}
     max-bytes: ${ATTACHMENT_MAX_BYTES:26214400}
+  captions:
+    # A final subtitle line reaches durable storage, so its length is bounded
+    # here. Truncated rather than rejected, unlike chat: a speaker cannot retype
+    # what they said, and half a sentence beats an error mid-meeting.
+    max-length: ${CAPTION_MAX_LENGTH:1000}
+  # Language model for subtitle translation and meeting summaries. Unset
+  # (default) = captions in the language they were spoken and no summaries; the
+  # 'ai' profile plus a base URL switches both on. The OpenAI chat-completions
+  # wire format, so this points equally at OpenAI, Azure, Ollama, vLLM or
+  # LiteLLM — including one inside your own network, which for a transcript is
+  # often the only acceptable answer. See docker-compose.ai.yml.
+  ai:
+    base-url: ${AI_BASE_URL:}
+    api-key: ${AI_API_KEY:}
+    model: ${AI_MODEL:gpt-4o-mini}
+    # Short on purpose: this sits behind a live subtitle, and a model that
+    # answers in twelve seconds has not been slow, it has been useless.
+    timeout-ms: ${AI_TIMEOUT_MS:6000}
+    # Summaries get their own, much longer budget. Nobody is watching one
+    # generate, and cutting it off at subtitle speed produces half a record.
+    summary-timeout-ms: ${AI_SUMMARY_TIMEOUT_MS:60000}
   chat:
     # How many recent messages to retain per room (in-memory) and replay on join.
     history-limit: 100
@@ -57,6 +78,20 @@ warroomlive:
   # three (see docker-compose.sfu.yml) switches /api/media/config to SFU mode and
   # enables the LiveKit token endpoint.
   media:
+    # Above this many participants a room moves from the full mesh to the SFU.
+    # A mesh is the lowest-latency path there is for a handful of people —
+    # nothing sits between the two browsers — but every participant uploads their
+    # video once per peer, so the ninth arrival asks everyone for eight copies.
+    #
+    # The switch is one-way for the life of a room: a room that drops back to
+    # eight stays on the SFU, because changing transport costs everyone a
+    # renegotiation and a room hovering at the limit would do nothing else.
+    #
+    # Only meaningful where an SFU is actually deployed (LIVEKIT_* below);
+    # without one a room over the limit stays on the mesh, which is why the hard
+    # capacity cap exists. 0 disables the mesh entirely — every room straight to
+    # the SFU.
+    mesh-max-peers: ${MESH_MAX_PEERS:8}
     livekit-url: ${LIVEKIT_URL:}
     livekit-api-key: ${LIVEKIT_API_KEY:}
     livekit-api-secret: ${LIVEKIT_API_SECRET:}
@@ -94,6 +129,12 @@ warroomlive:
     # a handful of rows recording nothing about what was said, and a room may
     # want the shape of its history long after the transcript has gone.
     meetings-days: ${RETENTION_MEETINGS_DAYS:0}
+    # What was said out loud — the most sensitive thing this system stores, and
+    # the one most likely to have a legal answer already attached. Its own
+    # period, and in most deployments a shorter one than the meeting history: a
+    # room may want to know it met for two hours last March long after it should
+    # have stopped keeping the words.
+    transcripts-days: ${RETENTION_TRANSCRIPTS_DAYS:0}
     interval-ms: ${RETENTION_INTERVAL_MS:3600000}
     initial-delay-ms: ${RETENTION_INITIAL_DELAY_MS:60000}
 

@@ -22,11 +22,20 @@
   color: var(--ink-dim);
 }
 
+/* Wraps rather than squeezes. Adding one more control used to steal width from
+   every button in the row until their labels broke one character per line —
+   flex will happily shrink a button below the size of the word in it. */
 .app__controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
-  gap: 1rem;
+  gap: 0.6rem 1rem;
   margin-bottom: 1rem;
+}
+
+.app__controls button {
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .app__controls label {
@@ -103,6 +112,16 @@
 .stage {
   min-width: 0;
   position: relative;
+}
+
+/* What the subtitles are anchored to.
+   The video, not the stage: the stage stretches with the sidebar and can run
+   past the bottom of the window, which would put the newest subtitle line below
+   the fold — the one line somebody actually needs to read. The tiles are always
+   on screen, so their bottom edge is the right place for a subtitle. */
+.video-area {
+  position: relative;
+  min-width: 0;
 }
 
 /* The tile size is the tile size. With `1fr` the column stretched to fill the
@@ -373,20 +392,19 @@ body.is-resizing {
   border-bottom-color: var(--accent);
 }
 
-/* One panel at a time, at every width. */
+/* One panel at a time, at every width.
+   Driven by `hidden` on the panel itself rather than by pairing the sidebar's
+   active tab against each panel's name. That pairing had to name every panel
+   twice, so a new one that forgot to add its line rendered into the DOM and
+   never became visible — present to `.count()`, invisible to a person. `hidden`
+   is also what a tabpanel ARIA-wants when its tab is not selected, so this is
+   one fact instead of two that can disagree. */
 .sidebar__panel {
-  display: none;
   min-width: 0;
 }
 
-.sidebar[data-active='members'] .sidebar__panel[data-panel='members'],
-.sidebar[data-active='agenda'] .sidebar__panel[data-panel='agenda'],
-.sidebar[data-active='meetings'] .sidebar__panel[data-panel='meetings'],
-.sidebar[data-active='recordings'] .sidebar__panel[data-panel='recordings'],
-.sidebar[data-active='search'] .sidebar__panel[data-panel='search'],
-.sidebar[data-active='files'] .sidebar__panel[data-panel='files'],
-.sidebar[data-active='chat'] .sidebar__panel[data-panel='chat'] {
-  display: block;
+.sidebar__panel[hidden] {
+  display: none;
 }
 
 .members {
@@ -1978,4 +1996,220 @@ body.is-resizing {
 
 .mention__at {
   color: var(--info);
+}
+
+/* --- Live subtitles ------------------------------------------------------
+   Over the video rather than beside it: a subtitle is read while looking at the
+   person speaking, and a panel would make that a choice.
+
+   Anchored to the bottom and grown upwards, the way every subtitle track works
+   — the newest line stays where the eye already is instead of the whole block
+   shifting down each time somebody speaks. */
+.captions {
+  position: absolute;
+  left: 50%;
+  /* Below the tiles rather than across them: a tile carries its own name badge
+     and a live reaction can float over it, and subtitles laid on top made three
+     unrelated things illegible at once. */
+  top: calc(100% + 0.5rem);
+  transform: translateX(-50%);
+  width: min(46rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  /* The video underneath is still the thing being watched: clicks, drags on the
+     divider and the zoom control all have to pass straight through. */
+  pointer-events: none;
+  z-index: 3;
+}
+
+.caption {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 8px;
+  /* Its own dark ground in both themes, not a surface token. Subtitles sit on
+     video, and video is whatever colour it happens to be — a light-theme panel
+     colour here would be unreadable over a bright frame. */
+  background: rgb(0 0 0 / 72%);
+  color: #f4f6f8;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  text-wrap: balance;
+}
+
+/* Still being revised. Dimmed rather than italic or animated: it says "not
+   settled yet" without making the text harder to read, which for the line
+   somebody is actively trying to follow is the whole job. */
+.caption--draft {
+  opacity: 0.72;
+}
+
+.caption__speaker {
+  grid-row: 1 / span 2;
+  align-self: start;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  padding-top: 0.15rem;
+  white-space: nowrap;
+}
+
+.caption__text {
+  grid-column: 2;
+}
+
+/* The language the reader did not ask for. Present, because a translation is
+   sometimes wrong and a room that can see the original can catch it — and
+   quieter, because it is not the one they are reading. */
+.caption__alt {
+  grid-column: 2;
+  font-size: 0.85rem;
+  color: #b9c0c8;
+}
+
+.caption-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.caption-control__lang select {
+  padding: 0.3rem 0.4rem;
+}
+
+.caption-control__error {
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
+/* --- Transcript panel ---------------------------------------------------- */
+.transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0;
+  height: 100%;
+}
+
+.transcript__title {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+/* The summary comes first: nobody opens this to read an hour of speech, they
+   open it to find out what was decided. */
+.summary {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  background: var(--surface-raised);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.summary__heading {
+  margin: 0 0 0.25rem;
+  font-size: 0.82rem;
+  color: var(--accent);
+}
+
+.summary__points,
+.summary__tasks {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.summary__task {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.summary__task-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chip--owner {
+  color: var(--info);
+  background: transparent;
+  padding-left: 0;
+}
+
+.summary__add {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+}
+
+.summary__meta {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+}
+
+.summary__error {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--danger);
+}
+
+.transcript__filter input {
+  width: 100%;
+}
+
+.transcript__empty {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-dim);
+}
+
+.transcript__lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.transcript__line {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.transcript__time {
+  grid-row: 1 / span 3;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  padding-top: 0.1rem;
+}
+
+.transcript__speaker {
+  grid-column: 2;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+
+.transcript__text {
+  grid-column: 2;
+}
+
+.transcript__alt {
+  grid-column: 2;
+  color: var(--ink-dim);
 }

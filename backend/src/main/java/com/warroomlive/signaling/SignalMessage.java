@@ -15,6 +15,10 @@ import com.fasterxml.jackson.databind.JsonNode;
  *   <li>{@code state} — {@code from}'s media on/off flags, broadcast to the rest of the room.</li>
  *   <li>{@code reaction} — an ephemeral emoji from {@code from}, broadcast to the rest of the room.</li>
  *   <li>{@code hand} — {@code from}'s raise-hand flag, broadcast to the rest of the room.</li>
+ *   <li>{@code caption} — a live subtitle line from {@code from}; interim results are
+ *       relayed only, final ones are recorded and get an {@code id}.</li>
+ *   <li>{@code caption-translated} — server → room, a translation catching up with the
+ *       caption of the same {@code id}.</li>
  *   <li>{@code lock} — host asks to lock ({@code payload=true}) or unlock the room to newcomers.</li>
  *   <li>{@code kick} — host asks to remove the peer named in {@code to} from the room.</li>
  *   <li>{@code peers} — server → client, the peers already in the room on join.</li>
@@ -72,6 +76,24 @@ public record SignalMessage(
      * merely refetched on it would show the same list it already had.
      */
     public static final String TYPE_AGENDA_DUE = "agenda-due";
+    /**
+     * A live subtitle line from {@code from}, broadcast to the rest of the room.
+     *
+     * <p>Payload {@code {text, lang, final, spokenAt}}, and on the way back out
+     * an {@code id} once the line is durable. Interim results — recognition's
+     * running guess, replaced several times a second — are relayed and forgotten;
+     * only {@code final} ones are recorded, the same split the CRDT plane makes
+     * between a document and an awareness cursor.
+     */
+    public static final String TYPE_CAPTION = "caption";
+    /**
+     * Server-originated: the translation of an already-broadcast caption line.
+     *
+     * <p>Its own message, arriving later, because a subtitle cannot wait for a
+     * language model. Payload {@code {id, translation, translationLang}}, where
+     * {@code id} matches the caption this belongs to.
+     */
+    public static final String TYPE_CAPTION_TRANSLATED = "caption-translated";
     public static final String TYPE_ROOM_FULL = "room-full";
     public static final String TYPE_ROOM_LOCKED = "room-locked";
     public static final String TYPE_ERROR = "error";

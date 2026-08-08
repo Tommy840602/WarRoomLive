@@ -1,0 +1,34 @@
+# Opt-in AI overlay: translated subtitles and meeting summaries.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ai.yml up --build
+#
+# Live captions, the transcript and the meeting record all work without this —
+# what the overlay adds is the second subtitle language and the 重點摘要.
+#
+# Ships a DEV-ONLY model stand-in (devai) that speaks the OpenAI
+# chat-completions format from a fixed phrasebook, so the whole path runs with no
+# API key and no egress. It translates the handful of phrases the test suites
+# say and marks everything else `[devai] …` rather than inventing a translation.
+# It is a fixture. Do not point real meetings at it.
+#
+# For production, drop the devai service and set AI_BASE_URL / AI_API_KEY /
+# AI_MODEL at whatever you run — OpenAI, Azure OpenAI, or an in-network Ollama,
+# vLLM or LiteLLM. For a war room the transcript is usually the part that decides
+# this, and "the model is inside our network" is often the only acceptable answer.
+services:
+  devai:
+    build: ./devai
+    environment:
+      PORT: "8090"
+      MODEL_NAME: devai-phrasebook
+
+  backend:
+    environment:
+      SPRING_PROFILES_ACTIVE: postgres,ai
+      AI_BASE_URL: ${AI_BASE_URL:-http://devai:8090/v1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-devai-phrasebook}
+      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-6000}
+      AI_SUMMARY_TIMEOUT_MS: ${AI_SUMMARY_TIMEOUT_MS:-60000}
+    depends_on:
+      - devai
