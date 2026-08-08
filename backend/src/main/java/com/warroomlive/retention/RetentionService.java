@@ -1,6 +1,8 @@
 package com.warroomlive.retention;
 
 import com.warroomlive.agenda.CalendarEventEntity;
+import com.warroomlive.meetings.MeetingEntity;
+import com.warroomlive.meetings.MeetingStore;
 import com.warroomlive.agenda.CalendarStore;
 import com.warroomlive.agenda.TodoEntity;
 import com.warroomlive.agenda.TodoStore;
@@ -62,6 +64,7 @@ public class RetentionService {
     private final AttachmentStore attachments;
     private final TodoStore todos;
     private final CalendarStore calendar;
+    private final MeetingStore meetings;
     private final TransactionTemplate tx;
     private final MeterRegistry metrics;
 
@@ -71,6 +74,7 @@ public class RetentionService {
     private final Duration publishedEventRetention;
     private final Duration attachmentRetention;
     private final Duration agendaRetention;
+    private final Duration meetingRetention;
 
     public RetentionService(
             EntityManager entityManager,
@@ -78,6 +82,7 @@ public class RetentionService {
             AttachmentStore attachments,
             TodoStore todos,
             CalendarStore calendar,
+            MeetingStore meetings,
             TransactionTemplate tx,
             MeterRegistry metrics,
             @Value("${warroomlive.retention.recordings-days:0}") int recordingDays,
@@ -85,12 +90,14 @@ public class RetentionService {
             @Value("${warroomlive.retention.audit-days:0}") int auditDays,
             @Value("${warroomlive.retention.published-events-days:0}") int publishedEventDays,
             @Value("${warroomlive.retention.attachments-days:0}") int attachmentDays,
-            @Value("${warroomlive.retention.agenda-days:0}") int agendaDays) {
+            @Value("${warroomlive.retention.agenda-days:0}") int agendaDays,
+            @Value("${warroomlive.retention.meetings-days:0}") int meetingDays) {
         this.entityManager = entityManager;
         this.recordings = recordings;
         this.attachments = attachments;
         this.todos = todos;
         this.calendar = calendar;
+        this.meetings = meetings;
         this.tx = tx;
         this.metrics = metrics;
         this.recordingRetention = Duration.ofDays(recordingDays);
@@ -99,6 +106,7 @@ public class RetentionService {
         this.publishedEventRetention = Duration.ofDays(publishedEventDays);
         this.attachmentRetention = Duration.ofDays(attachmentDays);
         this.agendaRetention = Duration.ofDays(agendaDays);
+        this.meetingRetention = Duration.ofDays(meetingDays);
     }
 
     /**
@@ -113,6 +121,7 @@ public class RetentionService {
             purgeRecordings();
             purgeAttachments();
             purgeAgenda();
+            purgeMeetings();
             purgeChat();
             purgeAudit();
             purgePublishedEvents();
@@ -218,6 +227,33 @@ public class RetentionService {
             removed += expired.size();
         }
         report("agenda", removed, agendaRetention);
+        return removed;
+    }
+
+    /**
+     * A room's meeting history.
+     *
+     * <p>Its own period rather than the agenda's: this is a handful of rows a
+     * meeting recording nothing else about who said what, and a room may want
+     * to keep the shape of its own history long after the transcript of it has
+     * gone. Aged on the <em>start</em> — a meeting whose node died never got an
+     * end, and ageing on a null column would keep those rows for ever.
+     */
+    int purgeMeetings() {
+        if (meetingRetention.isZero()) {
+            return 0;
+        }
+        Instant cutoff = Instant.now().minus(meetingRetention);
+        int removed = 0;
+        for (int pass = 0; pass < MAX_BATCHES; pass++) {
+            List<MeetingEntity> expired = meetings.expiredBefore(cutoff, BATCH);
+            if (expired.isEmpty()) {
+                break;
+            }
+            meetings.deleteAll(expired);
+            removed += expired.size();
+        }
+        report("meetings", removed, meetingRetention);
         return removed;
     }
 

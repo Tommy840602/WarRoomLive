@@ -63,6 +63,20 @@ export async function joinRoom(browser, { room, name, tag = name }) {
   return page
 }
 
+/**
+ * Opens a sidebar panel and waits for it to be on screen.
+ *
+ * One panel is shown at a time, at every width, and the default is chat — so
+ * anything that looks at a panel has to open it first. This is easy to forget
+ * because a hidden element still answers `.count()` and `.innerText()`: a suite
+ * that skips this passes its text assertions and then hangs on the first click,
+ * pointing at the control rather than at the panel that was never opened.
+ */
+export async function openPanel(page, label, selector) {
+  await page.locator('.sidebar__tab', { hasText: label }).click()
+  await page.locator(selector).first().waitFor({ state: 'visible', timeout: 10000 })
+}
+
 /** Display names shown in the member list, sorted for stable comparison. */
 export const memberNames = (page) =>
   page.locator('.members__name').allInnerTexts().then((n) => n.sort())

@@ -111,16 +111,103 @@ const mStore = new prom.Histogram({
   buckets: [0.005, 0.02, 0.05, 0.1, 0.25, 1, 5],
 })
 
-/** Serves /metrics; any other request falls through to Hocuspocus's default. */
-const metricsEndpoint = {
+/**
+ * Serves /metrics and /export; anything else falls through to Hocuspocus.
+ *
+ * `/export/:name` hands back a document as plain text. It exists because the
+ * backend assembles a meeting's record — chat, agenda, files, recordings — and
+ * the notes are the one part it cannot read: they are a Yjs update stream, and
+ * only this service has a Yjs to decode it with.
+ *
+ * Not proxied by nginx, exactly like /metrics: it is an internal call from the
+ * backend, on the compose network, and a room's notes are not something to hand
+ * out on the public origin without going through the backend's authorization.
+ */
+const httpEndpoints = {
   async onRequest({ request, response }) {
-    if (request.url?.split('?')[0] === '/metrics') {
+    const path = request.url?.split('?')[0] ?? ''
+    if (path === '/metrics') {
       const body = await prom.register.metrics()
       response.writeHead(200, { 'content-type': prom.register.contentType })
       response.end(body)
       throw null // short-circuit the remaining hooks and default handler
     }
+    if (path.startsWith('/export/')) {
+      const name = decodeURIComponent(path.slice('/export/'.length))
+      try {
+        const text = await exportDocument(name)
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+        response.end(text)
+      } catch (e) {
+        console.error(`collab service: export of ${name} failed`, e)
+        response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+        response.end('')
+      }
+      throw null
+    }
   },
+}
+
+/**
+ * The current text of a document's notes, plus a count of what is on its board.
+ *
+ * Rebuilt from the same snapshot-plus-log the fetch hook uses, so an export
+ * taken while nobody has the room open still sees everything written. Note it
+ * is the *current* state: one document per room, not one per meeting, so this
+ * is what the notes say now rather than what they said when a given meeting
+ * ended. Anything else would need per-meeting snapshots, and pretending
+ * otherwise in an exported record would be worse than saying so.
+ */
+async function exportDocument(name) {
+  if (!pool) return ''
+  const snapshot = (
+    await pool.query('SELECT data FROM collab_document WHERE name = $1', [name])
+  ).rows[0]?.data
+  const { rows } = await pool.query(
+    'SELECT data FROM collab_update WHERE name = $1 ORDER BY id',
+    [name],
+  )
+  const parts = [...(snapshot ? [snapshot] : []), ...rows.map((r) => r.data)]
+  if (parts.length === 0) return ''
+
+  const doc = new Y.Doc()
+  Y.applyUpdate(doc, parts.length === 1 ? parts[0] : Y.mergeUpdates(parts))
+  // TipTap stores the note as a ProseMirror XML fragment under `default`.
+  const notes = xmlText(doc.getXmlFragment('default'))
+  const strokes = doc.getArray('board:strokes').length
+  const stickies = doc.getArray('board:stickies').length
+  const board = strokes || stickies
+    ? `\n\n[白板:${strokes} 筆畫、${stickies} 張便利貼]`
+    : ''
+  return (notes.trim() + board).trim()
+}
+
+/**
+ * Plain text out of a ProseMirror fragment.
+ *
+ * Deliberately not a DOM serialisation: what an exported record wants is the
+ * words, and a block boundary is a newline. Walking the Y types directly avoids
+ * needing a DOM in a service that has none.
+ */
+function xmlText(fragment) {
+  const lines = []
+  const walk = (node, depth) => {
+    if (node instanceof Y.XmlText) {
+      lines.push(node.toString())
+      return
+    }
+    if (typeof node.toArray !== 'function') return
+    const children = node.toArray()
+    const inline = children.every((c) => c instanceof Y.XmlText)
+    const parts = []
+    for (const child of children) {
+      if (inline) parts.push(child.toString())
+      else walk(child, depth + 1)
+    }
+    if (inline && parts.length) lines.push(parts.join(''))
+  }
+  for (const child of fragment.toArray()) walk(child, 0)
+  return lines.join('\n')
 }
 
 /** Approximate live size per document; corrected to the real snapshot size on store. */
@@ -187,7 +274,7 @@ const updateLog = {
   },
 }
 
-const extensions = [metricsEndpoint, guards, updateLog]
+const extensions = [httpEndpoints, guards, updateLog]
 
 // Multi-instance mode: with REDIS_HOST set, Hocuspocus instances sync document
 // updates and awareness through Redis, so replicas can serve the same documents

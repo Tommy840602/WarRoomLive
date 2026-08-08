@@ -90,6 +90,10 @@ warroomlive:
     # the people using them, and keeping tasks whose meetings have gone leaves a
     # list nobody can place.
     agenda-days: ${RETENTION_AGENDA_DAYS:0}
+    # A room's meeting history. Its own period rather than the agenda's: this is
+    # a handful of rows recording nothing about what was said, and a room may
+    # want the shape of its history long after the transcript has gone.
+    meetings-days: ${RETENTION_MEETINGS_DAYS:0}
     interval-ms: ${RETENTION_INTERVAL_MS:3600000}
     initial-delay-ms: ${RETENTION_INITIAL_DELAY_MS:60000}
 

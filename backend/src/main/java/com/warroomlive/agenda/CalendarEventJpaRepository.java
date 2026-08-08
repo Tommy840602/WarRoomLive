@@ -23,6 +23,12 @@ public interface CalendarEventJpaRepository extends JpaRepository<CalendarEventE
     List<CalendarEventEntity> pageForRoom(@Param("room") String room, @Param("from") Instant from,
             @Param("limit") int limit, @Param("offset") int offset);
 
+    /** Entries that have started and whose room has not been told. Same rules as to-dos. */
+    @Query(value = "SELECT * FROM calendar_events WHERE starts_at <= :now "
+            + "AND reminded_at IS NULL AND completed_at IS NULL ORDER BY starts_at ASC LIMIT :limit",
+            nativeQuery = true)
+    List<CalendarEventEntity> dueAndUnannounced(@Param("now") Instant now, @Param("limit") int limit);
+
     /** Retention candidates, oldest first and bounded. */
     List<CalendarEventEntity> findByCreatedAtBeforeOrderByCreatedAtAsc(Instant cutoff, Limit limit);
 }

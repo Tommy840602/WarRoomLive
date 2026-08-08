@@ -54,6 +54,14 @@ psql(`INSERT INTO calendar_events (room, title, starts_at, created_by, created_a
   + `('${ROOM}', 'ancient meeting', now(), 'u', now() - interval '30 days'), `
   + `('${ROOM}', 'fresh meeting', now(), 'u', now())`)
 
+// --- Meeting history. Aged on started_at, not ended_at: the third row here is
+// the case that matters — a meeting whose node died never got an end, and a
+// sweep keyed on a nullable column would keep those rows for ever.
+psql(`INSERT INTO meetings (room, started_at, ended_at, participant_peak) VALUES `
+  + `('${ROOM}', now() - interval '30 days', now() - interval '30 days', 3), `
+  + `('${ROOM}', now() - interval '30 days', NULL, 2), `
+  + `('${ROOM}', now(), now(), 4)`)
+
 // --- Recordings, when the object store is part of this stack. The sweeper has
 // to be started from the same overlays, or it inherits a backend with no
 // object-store credentials and correctly declines to delete anything.
@@ -85,16 +93,17 @@ const recordingRows = () => count(`SELECT count(*) FROM recordings WHERE room = 
 const todoRows = () => count(`SELECT count(*) FROM todos WHERE room = '${ROOM}'`)
 const calendarRows = () => count(`SELECT count(*) FROM calendar_events WHERE room = '${ROOM}'`)
 const attachmentRows = () => count(`SELECT count(*) FROM attachments WHERE room = '${ROOM}'`)
+const meetingRows = () => count(`SELECT count(*) FROM meetings WHERE room = '${ROOM}'`)
 
 ok(chatRows() === 2 && searchRows() === 2 && auditRows() === 2 && outboxRows('') === 3
-  && todoRows() === 2 && calendarRows() === 2,
+  && todoRows() === 2 && calendarRows() === 2 && meetingRows() === 3,
   'seeded rows on both sides of the cutoff')
 
 // --- Run a sweeper: same image, retention on, first pass two seconds in.
 const sweeper = sh(`${SWEEPER_COMPOSE} run -d --rm --no-deps `
   + `-e RETENTION_CHAT_DAYS=7 -e RETENTION_AUDIT_DAYS=7 `
   + `-e RETENTION_PUBLISHED_EVENTS_DAYS=7 -e RETENTION_RECORDINGS_DAYS=7 `
-  + `-e RETENTION_ATTACHMENTS_DAYS=7 -e RETENTION_AGENDA_DAYS=7 `
+  + `-e RETENTION_ATTACHMENTS_DAYS=7 -e RETENTION_AGENDA_DAYS=7 -e RETENTION_MEETINGS_DAYS=7 `
   + `-e RETENTION_INITIAL_DELAY_MS=2000 -e RETENTION_INTERVAL_MS=5000 `
   + `backend`)
 
@@ -126,6 +135,12 @@ try {
   ok(psql(`SELECT title FROM calendar_events WHERE room = '${ROOM}'`) === 'fresh meeting',
     'the calendar entry it kept is the recent one')
 
+  // Both old meetings go, including the one that never ended — this table had
+  // no sweep at all until now, so it grew for ever while nobody could read it.
+  await until('the old meetings are removed', () => meetingRows() === 1, 30_000, 1000)
+  ok(count(`SELECT count(*) FROM meetings WHERE room = '${ROOM}' AND ended_at IS NULL`) === 0,
+    'including one that never ended — ageing on started_at, not on a nullable column')
+
   if (hasObjects) {
     await until('the expired attachment row is removed', () => attachmentRows() === 0, 60_000, 1000)
     ok(true, 'the expired shared file is removed')
@@ -152,6 +167,7 @@ try {
   psql(`DELETE FROM recordings WHERE room = '${ROOM}'`)
   psql(`DELETE FROM attachments WHERE room = '${ROOM}'`)
   psql(`DELETE FROM todos WHERE room = '${ROOM}'`)
+  psql(`DELETE FROM meetings WHERE room = '${ROOM}'`)
   psql(`DELETE FROM calendar_events WHERE room = '${ROOM}'`)
 }
 

@@ -8,7 +8,7 @@
 import { createHash, createHmac } from 'node:crypto'
 import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { ORIGIN, RUN_ID, done, joinRoom, launch, ok, sleep } from './lib.mjs'
+import { ORIGIN, RUN_ID, done, joinRoom, launch, ok, openPanel, sleep } from './lib.mjs'
 
 const room = 'ui-rec-' + RUN_ID
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
@@ -63,6 +63,7 @@ ok(webhook.ok, 'a completed recording exists for the room')
 
 const browser = await launch()
 const page = await joinRoom(browser, { room, name: 'Viewer' })
+await openPanel(page, '錄影', '.recordings')
 await sleep(3000)
 
 ok(await page.locator('.recordings').count() === 1, 'the room shows a recordings panel')

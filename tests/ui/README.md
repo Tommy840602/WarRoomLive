@@ -36,6 +36,21 @@ tests (`npm test` in `frontend/`) are the part that does run there, and
 
 ## Notes
 
+- **Open the panel first.** One sidebar panel is shown at a time, at every
+  width, and the default is chat. A hidden element still answers `.count()` and
+  `.innerText()`, so a suite that forgets passes its text assertions and then
+  hangs on the first click — pointing at the control rather than at the panel
+  that was never opened. `openPanel(page, label, selector)` in `lib.mjs` does
+  it and waits for visibility.
+- **Do not write an assertion that only holds at some times of day.** One suite
+  captured `明天14:00-15:00` and asserted it landed in 現在, which is true only
+  after 14:00. It passed all afternoon and failed at ten to one in the morning,
+  with nothing about the product changed. Relative times (`2小時後`) say what
+  they mean at any hour.
+- **Address items by name, not by position.** The agenda's bands reorder as
+  items move between them, so "the first triage button" is a different item
+  after every press.
+
 - `UI_ORIGIN` overrides the origin (default `http://localhost:8088`).
 - `PLAYWRIGHT_CHROMIUM` points at a browser binary when you do not want
   Playwright's own download (useful in a sandbox that ships one).

@@ -21,6 +21,7 @@ export type SignalType =
   | 'room-state'
   | 'attachment'
   | 'agenda'
+  | 'agenda-due'
   | 'room-full'
   | 'room-locked'
   | 'error'
@@ -116,4 +117,25 @@ export interface SignalMessage<TPayload = unknown> {
   /** Target peer id for point-to-point relay (offer/answer/candidate). */
   to?: string
   payload?: TPayload
+}
+
+/** One occupancy episode of a room, as the history panel reads it. */
+export interface Meeting {
+  id: number
+  room: string
+  startedAt: string
+  endedAt?: string
+  participantPeak: number
+  durationSeconds?: number
+  /** Present and true while the room is still occupied — the duration is not a fact yet. */
+  live?: boolean
+}
+
+/** Payload of an `agenda-due` message: this specific thing's time has arrived. */
+export interface AgendaDue {
+  kind: 'todo' | 'calendar'
+  id: number
+  text: string
+  dueAt: string
+  assignee?: string
 }
