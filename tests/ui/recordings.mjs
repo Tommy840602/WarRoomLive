@@ -12,8 +12,8 @@ import { ORIGIN, RUN_ID, done, joinRoom, launch, ok, openPanel, sleep } from './
 
 const room = 'ui-rec-' + RUN_ID
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
-const COMPOSE = `docker compose -f ${REPO_ROOT}docker-compose.yml `
-  + `-f ${REPO_ROOT}docker-compose.sfu.yml -f ${REPO_ROOT}docker-compose.recording.yml`
+// One compose file; the recording feature's services are behind its profile.
+const COMPOSE = `docker compose -f ${REPO_ROOT}docker-compose.yml --profile recording`
 const API_KEY = 'devkey'
 const API_SECRET = 'devkey_secret_needs_at_least_32_bytes'
 const OBJECT_KEY = `${room}.mp4`

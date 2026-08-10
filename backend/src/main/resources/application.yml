@@ -57,7 +57,7 @@ warroomlive:
   # 'ai' profile plus a base URL switches both on. The OpenAI chat-completions
   # wire format, so this points equally at OpenAI, Azure, Ollama, vLLM or
   # LiteLLM — including one inside your own network, which for a transcript is
-  # often the only acceptable answer. See docker-compose.ai.yml.
+  # often the only acceptable answer. See the `ai` feature.
   ai:
     base-url: ${AI_BASE_URL:}
     api-key: ${AI_API_KEY:}
@@ -75,7 +75,7 @@ warroomlive:
     # length is bounded here; over-long messages are rejected, never truncated.
     max-length: 4000
   # Media plane. Unset (default) = full-mesh WebRTC in the browser. Setting all
-  # three (see docker-compose.sfu.yml) switches /api/media/config to SFU mode and
+  # three (see the `sfu` feature) switches /api/media/config to SFU mode and
   # enables the LiveKit token endpoint.
   media:
     # Above this many participants a room moves from the full mesh to the SFU.
@@ -96,12 +96,12 @@ warroomlive:
     livekit-api-key: ${LIVEKIT_API_KEY:}
     livekit-api-secret: ${LIVEKIT_API_SECRET:}
     # ICE servers handed to mesh-mode browsers. TURN kicks in when all three
-    # TURN_* variables are set (see docker-compose.turn.yml).
+    # TURN_* variables are set (see the `turn` feature).
     stun-urls: ${STUN_URLS:stun:stun.l.google.com:19302}
     turn-urls: ${TURN_URLS:}
     turn-username: ${TURN_USERNAME:}
     turn-password: ${TURN_PASSWORD:}
-    # Recording (docker-compose.recording.yml): where THIS server reaches LiveKit's
+    # Recording (the `recording` feature): where THIS server reaches LiveKit's
     # twirp API, and the S3 output egress uploads finished MP4s to.
     livekit-internal-url: ${LIVEKIT_INTERNAL_URL:}
     egress-s3-endpoint: ${EGRESS_S3_ENDPOINT:}

@@ -15,7 +15,7 @@
 set -eu
 cd "$(dirname "$0")/../.."
 
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.backup.yml"
+COMPOSE="./stack.sh"
 PROJECT=${PROJECT:-warroomlive}
 NETWORK=${NETWORK:-${PROJECT}_default}
 RESTORE=warroomlive-restore-drill

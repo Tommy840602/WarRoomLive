@@ -1,5 +1,5 @@
 // Authentication enforcement on both WebSocket planes, for the oidc overlay:
-//   docker compose -f docker-compose.yml -f docker-compose.oidc.yml up -d
+//   ./stack.sh up oidc -d
 //   tests/e2e/run.sh oidc
 //
 // The point is symmetry — signaling and collab must both refuse anonymous and

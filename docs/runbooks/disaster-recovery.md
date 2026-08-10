@@ -2,14 +2,12 @@
 
 藍圖第十一章的落地(本機/開發形態):WAL 歸檔 + 實體基底備份 = PITR 能力,加上一套**可重複執行的還原演練**。PostgreSQL 是唯一 source of truth——聊天、collab 快照與 update log、outbox、會議、稽核/搜尋讀模型都在其中,一次 PITR 覆蓋全部;讀模型(audit/search)另可從事件重放重建。
 
-## 啟用備份(backup 疊加層)
+## 啟用備份(`backup` 功能)
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.backup.yml up -d
+./stack.sh up backup -d
 tests/dr/backup.sh        # 產生一份 base backup(pg_basebackup -Xstream)
-```
-
-疊加層開啟 `archive_mode=on`,WAL 持續歸檔到 `backups` volume(`archive_timeout=60` 保證至少每分鐘一段);正式環境把 `archive_command` 換成上傳物件儲存,並照藍圖做 Multi-AZ、跨區域備份與備份加密。
+````` 功能開啟 `archive_mode=on`,WAL 持續歸檔到 `backups` volume(`archive_timeout=60` 保證至少每分鐘一段);正式環境把 `archive_command` 換成上傳物件儲存,並照藍圖做 Multi-AZ、跨區域備份與備份加密。
 
 ## 還原演練(`tests/dr/restore-drill.sh`)
 
@@ -34,11 +32,10 @@ tests/dr/backup.sh        # 產生一份 base backup(pg_basebackup -Xstream)
 
 首次執行時歸檔靜默失敗(`pg_stat_archiver.failed_count` 持續上升、歸檔目錄為空):備份目錄由 root 建立,postgres 歸檔程序無寫入權限,導致「以為有 PITR、實際上沒有」——正是定期演練要抓的那類問題。已修:`backup.sh` 建目錄後 `chown postgres`。**監控建議**:對 `pg_stat_archiver.failed_count` 設告警。
 
-## 物件儲存歸檔 + 備份加密(backup-s3 疊加層)
+## 物件儲存歸檔 + 備份加密(backup-`s3` 功能)
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.backup.yml \
-  -f docker-compose.backup-s3.yml up -d
+./stack.sh up backup-s3 -- -d
 tests/dr/restore-s3-drill.sh        # 只從 bucket 還原的 PITR 演練
 ```
 

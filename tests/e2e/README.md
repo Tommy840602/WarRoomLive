@@ -47,14 +47,14 @@ up -d` brings it back.
 
 ```bash
 # oidc — token-lifecycle needs a TTL short enough to outlive in a test
-docker compose -f docker-compose.yml -f docker-compose.oidc.yml up -d
-DEVIDP_TOKEN_TTL=25 docker compose -f docker-compose.yml -f docker-compose.oidc.yml up -d
+./stack.sh up oidc -d
+DEVIDP_TOKEN_TTL=25 ./stack.sh up oidc -d
 
 # events
-docker compose -f docker-compose.yml -f docker-compose.events.yml up -d
+./stack.sh up events -d
 
 # scale
-docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d
+./stack.sh up scale -d
 ```
 
 ## Notes

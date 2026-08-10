@@ -4,9 +4,9 @@
 `:80` / `:443` 已經被既有的 reverse proxy 佔著，所以 WarRoomLive **不自己起 edge**——
 它把 frontend 綁在 loopback，由既有的 proxy 轉進來。
 
-> 這也是為什麼**不要**在這台機器上用 `docker-compose.tls.yml`：那個疊加層會自己起一個
+> 這也是為什麼**不要**在這台機器上用 `the `tls` feature`：那個功能會自己起一個
 > Caddy 綁 `:80`/`:443`，跟已經握著那兩個 port 的 edge 直接相撞。用
-> `docker-compose.prod.yml`。
+> `the `prod` feature`。
 
 ---
 
@@ -68,8 +68,7 @@ Postgres 的 volume，事後要改得連 volume 一起處理。
 ## 3. 啟動 stack
 
 ```bash
-docker compose --env-file .env.prod \
-  -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.prod  -f docker-compose.yml -f the `prod` feature up -d --build
 ```
 
 確認它活著（此時只有 loopback 通）：
@@ -159,7 +158,7 @@ done; echo
 ```
 
 看到全部 429、或第一個請求就 429，代表 `real-ip.conf` 沒生效——所有人被算成同一個
-呼叫端了。確認 `docker-compose.prod.yml` 有掛上它：
+呼叫端了。確認 `the `prod` feature` 有掛上它：
 
 ```bash
 docker compose exec frontend ls /etc/nginx/conf.d/
@@ -176,8 +175,8 @@ reverse proxy 代理不了。這決定了要不要動防火牆：
 | 模式 | 對外要開的 port | 何時需要 |
 |---|---|---|
 | **Mesh（預設）** | 無 | ≤8 人，且雙方 NAT 不算嚴格。媒體點對點直連，伺服器只轉信令 |
-| **+ TURN**（`docker-compose.turn.yml`） | `3478/tcp`、`3478/udp`、`49160-49200/udp` | 有人在嚴格 NAT／企業網路後面連不上時 |
-| **SFU**（`docker-compose.sfu.yml`） | `7881/tcp`、`7882/udp` | 要超過 8 人 |
+| **+ TURN**（`the `turn` feature`） | `3478/tcp`、`3478/udp`、`49160-49200/udp` | 有人在嚴格 NAT／企業網路後面連不上時 |
+| **SFU**（`the `sfu` feature`） | `7881/tcp`、`7882/udp` | 要超過 8 人 |
 
 先用預設的 mesh 上線，遇到「有人看不到彼此」再加 TURN。多開 port 之前先確認沒有跟
 `twin` 那邊撞到：
@@ -188,7 +187,7 @@ ss -ulnp | grep -E ':(3478|7882|49160)\b'
 
 加 TURN 時 `.env.prod` 要設 `TURN_PUBLIC_HOST=live.tommy-huang.dev`，而且
 **coturn 的預設帳密是開發用的**（`warroom:warroomsecret`，寫死在
-`docker-compose.turn.yml` 裡），對外開放前務必換掉，或改用 `--use-auth-secret`。
+`the `turn` feature` 裡），對外開放前務必換掉，或改用 `--use-auth-secret`。
 一個公開的、憑證是公開值的 TURN relay，就是一台免費的流量中繼。
 
 SFU 還要在 `infrastructure/livekit/livekit.yaml` 設 `rtc.node_ip: 178.104.225.148`——
@@ -201,8 +200,7 @@ SFU 還要在 `infrastructure/livekit/livekit.yaml` 設 `rtc.node_ip: 178.104.22
 預設**全部保留永久**。要開就改 `.env.prod` 的 `RETENTION_*_DAYS` 再重啟 backend：
 
 ```bash
-docker compose --env-file .env.prod \
-  -f docker-compose.yml -f docker-compose.prod.yml up -d backend
+docker compose --env-file .env.prod  -f docker-compose.yml -f the `prod` feature up -d backend
 ```
 
 第一次開的時候要有心理準備：如果資料庫裡已經有超過期限的資料，第一輪掃描就會刪。
@@ -215,8 +213,7 @@ docker compose --env-file .env.prod \
 ```bash
 cd /srv/warroomlive
 git pull
-docker compose --env-file .env.prod \
-  -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.prod  -f docker-compose.yml -f the `prod` feature up -d --build
 ```
 
 Flyway 會在 backend 啟動時自己跑 migration。升級期間房間會斷線，但前端會自動重連並
@@ -244,6 +241,6 @@ docker compose exec -T db pg_dump -U warroomlive warroomlive | gzip > warroom-$(
 ## 需要登入才能進房（選用）
 
 預設不需要登入。要接自己的 IdP（Keycloak／Entra）時用 `oidc` profile，
-**不要**把 `docker-compose.oidc.yml` 直接搬上來——那個疊加層裡的 `devidp` 是
+**不要**把 `the `oidc` feature` 直接搬上來——那個功能裡的 `devidp` 是
 開發用的假 IdP（固定帳密 alice/bob、記憶體金鑰），對外部署等於開一道無條件的門。
 要用的是它的 `OIDC_*` 環境變數指向真的 IdP。

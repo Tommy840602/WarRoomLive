@@ -1,15 +1,63 @@
-# Full stack: Postgres + Spring Boot backend + Yjs collab service + nginx-served frontend.
-# Start with: docker compose up --build
-# Then open http://localhost:8088 (override the port with FRONTEND_PORT).
+# WarRoomLive — the whole system, in one file.
+#
+#   ./stack.sh up                     # base: db + backend + collab + frontend
+#   ./stack.sh up oidc ai events      # three features on
+#   ./stack.sh up all                 # everything that can coexist
+#
+# WHY ONE FILE. This used to be a base file plus twelve overlays combined with
+# `-f`. That model had a trap with teeth: a scalar value is REPLACED by a later
+# `-f`, not merged, and several overlays each set SPRING_PROFILES_ACTIVE — so
+# `-f oidc -f ai` silently dropped OIDC and left the backend permit-all while
+# the login screen still rendered. Here there is nothing to merge, so that class
+# of bug cannot exist.
+#
+# HOW FEATURES WORK. Optional SERVICES carry a compose `profiles:` key and only
+# start when that profile is named. Optional SETTINGS on the shared services
+# (backend, collab, frontend) cannot be gated the same way — compose has no
+# per-key conditional — so every one of them is always present with a default
+# that means "off", and `stack.sh` supplies the on-values. That is the real cost
+# of a single file, and it is why the launcher still exists: the table of what
+# each feature switches on lives in stack.sh, on one screen.
+#
+# You can drive compose directly if you prefer — `docker compose --profile oidc
+# up` — but then the env for that feature is yours to set. stack.sh exists so
+# that pairing is not something to remember.
+#
+# ONE RULE WORTH KNOWING if you edit this: an always-on service may not
+# `depends_on` a profile-gated one. Compose rejects the whole project with
+# "depends on undefined service" whenever that profile is inactive. The frontend
+# therefore does not depend on devidp or livekit, and the backend does not
+# depend on redpanda or redis — nginx resolves every upstream at request time
+# (see frontend/nginx.conf), and the clients of Redis and the broker all treat
+# "not up yet" as transient.
+
 services:
+  # --- Always on ----------------------------------------------------------
   db:
     image: postgres:16-alpine
+    restart: ${RESTART_POLICY:-no}
+    # WAL archiving is always configured and off by default; `backup` flips
+    # PG_ARCHIVE_MODE to `on`. archive_command is harmless while archiving is
+    # off, which is what lets one command line serve both shapes.
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=${PG_ARCHIVE_MODE:-off}
+      - -c
+      - archive_command=test ! -f /backups/wal/%f && cp %p /backups/wal/%f
+      - -c
+      - archive_timeout=60
     environment:
       POSTGRES_USER: warroomlive
-      POSTGRES_PASSWORD: warroomlive
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-warroomlive}
       POSTGRES_DB: warroomlive
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Always mounted: an empty volume costs nothing, and a conditional mount
+      # is the one thing a single file cannot express.
+      - backups:/backups
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U warroomlive"]
       interval: 5s
@@ -18,36 +66,404 @@ services:
 
   backend:
     build: ./backend
+    restart: ${RESTART_POLICY:-no}
+    deploy:
+      replicas: ${BACKEND_REPLICAS:-1}
     environment:
+      # The Spring profile set, as ONE value. Every feature that needs a profile
+      # contributes to it in stack.sh, which is the whole reason that union is
+      # computed in one place rather than assembled by file-merge order.
       SPRING_PROFILES_ACTIVE: ${WARROOM_PROFILES:-postgres}
       DB_URL: jdbc:postgresql://db:5432/warroomlive
       DB_USER: warroomlive
-      DB_PASSWORD: warroomlive
-      # Behind the nginx proxy the browser Origin is the frontend host; allow it.
-      WARROOMLIVE_SIGNALING_ALLOWED_ORIGINS: "*"
+      DB_PASSWORD: ${DB_PASSWORD:-warroomlive}
+      # "*" is a local-development convenience; `prod` narrows it to one host.
+      WARROOMLIVE_SIGNALING_ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+
+      # oidc — an issuer here with no `oidc` Spring profile would be the
+      # fail-open this file was restructured to make impossible; stack.sh sets
+      # the two together.
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_JWK_SET_URI: ${OIDC_JWK_SET_URI:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+
+      # ai — unset means captions in the language they were spoken, no summaries.
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
+      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-6000}
+      AI_SUMMARY_TIMEOUT_MS: ${AI_SUMMARY_TIMEOUT_MS:-60000}
+
+      # events
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-}
+
+      # sfu / recording. The room cap is the mesh limit until an SFU exists to
+      # carry more than a mesh can.
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      WARROOMLIVE_SIGNALING_MAX_ROOM_SIZE: ${MAX_ROOM_SIZE:-8}
+      MESH_MAX_PEERS: ${MESH_MAX_PEERS:-8}
+      LIVEKIT_INTERNAL_URL: ${LIVEKIT_INTERNAL_URL:-}
+      EGRESS_S3_ENDPOINT: ${EGRESS_S3_ENDPOINT:-}
+      EGRESS_S3_BUCKET: ${EGRESS_S3_BUCKET:-}
+      EGRESS_S3_ACCESS_KEY: ${EGRESS_S3_ACCESS_KEY:-}
+      EGRESS_S3_SECRET_KEY: ${EGRESS_S3_SECRET_KEY:-}
+
+      # turn — the mesh path's relay; ignored in SFU mode, which does its own ICE.
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_PASSWORD: ${TURN_PASSWORD:-}
+
+      # scale / ha
+      REDIS_HOST: ${REDIS_HOST:-}
+
+      # observability
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      OTLP_TRACES_ENDPOINT: ${OTLP_TRACES_ENDPOINT:-http://tempo:4318/v1/traces}
+
+      # Retention: zero means keep forever, deliberately, so deploying this
+      # release deletes nothing until an operator chooses a period.
+      RETENTION_RECORDINGS_DAYS: ${RETENTION_RECORDINGS_DAYS:-0}
+      RETENTION_ATTACHMENTS_DAYS: ${RETENTION_ATTACHMENTS_DAYS:-0}
+      RETENTION_CHAT_DAYS: ${RETENTION_CHAT_DAYS:-0}
+      RETENTION_AGENDA_DAYS: ${RETENTION_AGENDA_DAYS:-0}
+      RETENTION_MEETINGS_DAYS: ${RETENTION_MEETINGS_DAYS:-0}
+      RETENTION_TRANSCRIPTS_DAYS: ${RETENTION_TRANSCRIPTS_DAYS:-0}
+      RETENTION_AUDIT_DAYS: ${RETENTION_AUDIT_DAYS:-0}
+      RETENTION_PUBLISHED_EVENTS_DAYS: ${RETENTION_PUBLISHED_EVENTS_DAYS:-0}
     depends_on:
       db:
         condition: service_healthy
 
   collab:
     build: ./collab
+    restart: ${RESTART_POLICY:-no}
+    deploy:
+      replicas: ${COLLAB_REPLICAS:-1}
     environment:
       DB_HOST: db
       DB_PORT: "5432"
       DB_NAME: warroomlive
       DB_USER: warroomlive
-      DB_PASSWORD: warroomlive
+      DB_PASSWORD: ${DB_PASSWORD:-warroomlive}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_JWK_SET_URI: ${OIDC_JWK_SET_URI:-}
+      EVENTS_ENABLED: ${EVENTS_ENABLED:-false}
+      REDIS_HOST: ${REDIS_HOST:-}
+      REDIS_SENTINEL_NODES: ${REDIS_SENTINEL_NODES:-}
+      REDIS_SENTINEL_MASTER: ${REDIS_SENTINEL_MASTER:-}
     depends_on:
       db:
         condition: service_healthy
 
   frontend:
     build: ./frontend
+    restart: ${RESTART_POLICY:-no}
     ports:
-      - "${FRONTEND_PORT:-8088}:80"
+      # A port cannot be un-published by a variable — an empty value publishes
+      # on a random host port rather than none — so `tls` and `prod` bind it to
+      # loopback instead, where the edge can reach it and the internet cannot.
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-8088}:80"
+    volumes:
+      # Empty by default; `prod` swaps in real-ip.conf. See that file for why
+      # trusting X-Forwarded-For is only safe behind an edge.
+      - ./infrastructure/edge/${EDGE_REALIP_CONF:-none.conf}:/etc/nginx/conf.d/00-real-ip.conf:ro
     depends_on:
       - backend
       - collab
 
+  # --- oidc ---------------------------------------------------------------
+  # DEV-ONLY identity provider (alice/alice123, bob/bob123) served under the
+  # frontend origin at /auth. Production drops it and points OIDC_ISSUER /
+  # OIDC_JWK_SET_URI / OIDC_CLIENT_ID at Keycloak, Entra ID or similar.
+  devidp:
+    build: ./devidp
+    profiles: [oidc]
+    restart: ${RESTART_POLICY:-no}
+    environment:
+      PORT: "8089"
+      ISSUER: ${PUBLIC_ORIGIN:-http://localhost:8088}/auth
+      TOKEN_TTL_SECONDS: ${DEVIDP_TOKEN_TTL:-1800}
+
+  # --- ai -----------------------------------------------------------------
+  # DEV-ONLY model stand-in: speaks the OpenAI chat-completions format from a
+  # fixed phrasebook, marking anything it does not know as `[devai] …` rather
+  # than inventing a translation. A fixture. Do not point real meetings at it.
+  devai:
+    build: ./devai
+    profiles: [ai]
+    restart: ${RESTART_POLICY:-no}
+    environment:
+      PORT: "8090"
+      MODEL_NAME: devai-phrasebook
+
+  # --- events -------------------------------------------------------------
+  redpanda:
+    image: redpandadata/redpanda:v26.2.1
+    profiles: [events]
+    restart: ${RESTART_POLICY:-no}
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      # Built-in schema registry: the envelope contract's source of truth.
+      - --schema-registry-addr=0.0.0.0:8081
+
+  # Example consumer: audit_log + message_search read models, deduped on eventId.
+  indexer:
+    build: ./indexer
+    profiles: [events]
+    restart: ${RESTART_POLICY:-no}
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: warroomlive
+      DB_USER: warroomlive
+      DB_PASSWORD: ${DB_PASSWORD:-warroomlive}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # --- sfu / recording ----------------------------------------------------
+  # Listed under both profiles so `recording` alone still brings its SFU up.
+  livekit:
+    image: livekit/livekit-server:v1.13.5
+    profiles: [sfu, recording]
+    restart: ${RESTART_POLICY:-no}
+    command: --config /etc/livekit.yaml
+    volumes:
+      # `recording` swaps in the config that points LiveKit at Redis for egress.
+      - ./infrastructure/livekit/${LIVEKIT_CONFIG:-livekit.yaml}:/etc/livekit.yaml:ro
+    ports:
+      - "7881:7881"       # ICE over TCP
+      - "7882:7882/udp"   # ICE over UDP (port-muxed)
+
+  egress:
+    image: livekit/egress:latest
+    profiles: [recording]
+    restart: ${RESTART_POLICY:-no}
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    volumes:
+      - ./infrastructure/livekit/egress.yaml:/etc/egress.yaml:ro
+    shm_size: "2gb" # headless Chrome compositing
+    depends_on:
+      - redis
+      - livekit
+
+  minio:
+    image: minio/minio:latest
+    profiles: [recording]
+    restart: ${RESTART_POLICY:-no}
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: warroom
+      MINIO_ROOT_PASSWORD: warroomsecret
+    volumes:
+      - recordings:/data
+
+  minio-init:
+    image: minio/mc:latest
+    profiles: [recording]
+    entrypoint: ["/bin/sh", "-c",
+      "until mc alias set local http://minio:9000 warroom warroomsecret; do sleep 1; done; mc mb -p local/recordings"]
+    depends_on:
+      - minio
+
+  # --- scale / ha / recording ---------------------------------------------
+  # One Redis serves three purposes: the signaling backplane (scale), the
+  # Sentinel master (ha), and egress coordination (recording).
+  redis:
+    image: redis:7-alpine
+    profiles: [scale, ha, recording]
+    restart: ${RESTART_POLICY:-no}
+    # Announcing its own name is required once Sentinel is watching and inert
+    # otherwise, so it is unconditional rather than another variable.
+    command: redis-server --replica-announce-ip redis
+
+  redis-replica:
+    image: redis:7-alpine
+    profiles: [ha]
+    restart: ${RESTART_POLICY:-no}
+    command: redis-server --replicaof redis 6379 --replica-announce-ip redis-replica
+    depends_on:
+      - redis
+
+  sentinel-1: &sentinel
+    image: redis:7-alpine
+    profiles: [ha]
+    restart: ${RESTART_POLICY:-no}
+    entrypoint: ["/bin/sh", "-c",
+      "cp /etc/sentinel.conf /tmp/sentinel.conf && exec redis-sentinel /tmp/sentinel.conf"]
+    volumes:
+      - ./infrastructure/redis/sentinel.conf:/etc/sentinel.conf:ro
+    depends_on:
+      - redis
+      - redis-replica
+
+  sentinel-2: *sentinel
+  sentinel-3: *sentinel
+
+  # --- observability ------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    profiles: [observability]
+    restart: ${RESTART_POLICY:-no}
+    volumes:
+      - ./infrastructure/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - backend
+      - collab
+
+  tempo:
+    image: grafana/tempo:latest
+    profiles: [observability]
+    restart: ${RESTART_POLICY:-no}
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ./infrastructure/observability/tempo.yml:/etc/tempo.yml:ro
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    profiles: [observability]
+    restart: ${RESTART_POLICY:-no}
+    volumes:
+      - ./infrastructure/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+
+  # Dev-only webhook receiver: logs every notification so delivery is
+  # verifiable. Production replaces the receivers in alertmanager.yml and this
+  # container then has no traffic.
+  alert-logger:
+    image: node:20-alpine
+    profiles: [observability]
+    restart: ${RESTART_POLICY:-no}
+    command:
+      - node
+      - -e
+      - |
+        require('http').createServer((req, res) => {
+          let body = ''
+          req.on('data', (c) => (body += c))
+          req.on('end', () => {
+            try {
+              const n = JSON.parse(body)
+              n.alerts?.forEach((a) => console.log(
+                'ALERT', a.status, a.labels.alertname,
+                'severity=' + a.labels.severity, 'job=' + (a.labels.job ?? '-')))
+            } catch { console.log('ALERT raw', body) }
+            res.end('ok')
+          })
+        }).listen(9095, () => console.log('alert-logger listening on :9095'))
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: [observability]
+    restart: ${RESTART_POLICY:-no}
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./infrastructure/observability/grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - ./infrastructure/observability/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/warroomlive.yml:ro
+      - ./infrastructure/observability/dashboard-warroomlive.json:/var/lib/grafana/dashboards/warroomlive.json:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+      - tempo
+
+  # --- turn ---------------------------------------------------------------
+  # Relay for mesh calls where direct peer-to-peer UDP is blocked. Long-term
+  # credentials here are dev defaults; change them (or switch coturn to
+  # --use-auth-secret) before exposing the relay publicly.
+  coturn:
+    image: coturn/coturn:4
+    profiles: [turn]
+    restart: ${RESTART_POLICY:-no}
+    command: >-
+      -n --log-file=stdout --fingerprint --lt-cred-mech
+      --realm=warroomlive --user=warroom:warroomsecret
+      --listening-port=3478 --min-port=49160 --max-port=49200
+      --no-tls --no-dtls
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "49160-49200:49160-49200/udp"
+
+  # --- tls ----------------------------------------------------------------
+  # Terminates TLS and proxies to the frontend, which `stack.sh up tls` binds to
+  # loopback so this is the only way in. Automatic Let's Encrypt for a real
+  # SITE_ADDRESS; Caddy's internal CA for localhost.
+  caddy:
+    image: caddy:2-alpine
+    profiles: [tls]
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+  # --- backup-s3 ----------------------------------------------------------
+  # An rclone sidecar syncs the backups volume into MinIO through a `crypt`
+  # remote: contents AND names are client-side encrypted with BACKUP_PASSPHRASE,
+  # so object storage never sees plaintext. Production points the same shipper
+  # at real S3/GCS by swapping the endpoint and credentials.
+  minio-backup:
+    image: minio/minio:latest
+    profiles: [backup-s3]
+    restart: ${RESTART_POLICY:-no}
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: warroom
+      MINIO_ROOT_PASSWORD: warroomsecret
+    volumes:
+      - minio-backup-data:/data
+
+  backup-shipper:
+    image: rclone/rclone:1.68
+    profiles: [backup-s3]
+    restart: ${RESTART_POLICY:-no}
+    entrypoint: ["/bin/sh", "/shipper.sh"]
+    environment:
+      RCLONE_CONFIG_S3_TYPE: s3
+      RCLONE_CONFIG_S3_PROVIDER: Minio
+      RCLONE_CONFIG_S3_ENDPOINT: http://minio-backup:9000
+      RCLONE_CONFIG_S3_ACCESS_KEY_ID: warroom
+      RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: warroomsecret
+      RCLONE_CONFIG_CRYPT_TYPE: crypt
+      RCLONE_CONFIG_CRYPT_REMOTE: "s3:${BACKUP_BUCKET:-warroom-backups}"
+      BACKUP_BUCKET: ${BACKUP_BUCKET:-warroom-backups}
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:-warroom-dev-backup-passphrase}
+      SHIP_INTERVAL: ${SHIP_INTERVAL:-10}
+    volumes:
+      - backups:/backups:ro
+      - ./infrastructure/backup/shipper.sh:/shipper.sh:ro
+    depends_on:
+      - minio-backup
+
 volumes:
   pgdata:
+  backups:
+  recordings:
+  caddy_data:
+  caddy_config:
+  minio-backup-data:

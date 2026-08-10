@@ -1,8 +1,7 @@
 // Recording library: a completed recording becomes a listed, playable item.
-// Needs the sfu + recording overlays (LiveKit credentials, MinIO, a database).
+// Needs the recording feature (LiveKit credentials, MinIO, a database).
 //
-//   docker compose -f docker-compose.yml -f docker-compose.sfu.yml \
-//     -f docker-compose.recording.yml up -d
+//   ./stack.sh up recording --build
 //   tests/e2e/run.sh recordings
 //
 // The recording itself is simulated by delivering the webhook LiveKit Egress

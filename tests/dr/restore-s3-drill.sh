@@ -9,7 +9,7 @@
 set -eu
 cd "$(dirname "$0")/../.."
 
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.backup.yml -f docker-compose.backup-s3.yml"
+COMPOSE="docker compose -f docker-compose.yml --profile backup-s3"
 PROJECT=${PROJECT:-warroomlive}
 NETWORK=${NETWORK:-${PROJECT}_default}
 RESTORE=warroomlive-s3-restore-drill
@@ -27,7 +27,7 @@ PASS=${BACKUP_PASSPHRASE:-warroom-dev-backup-passphrase}
 psql_src() { $COMPOSE exec -T db psql -U warroomlive -d warroomlive -tAc "$1"; }
 psql_restored() { docker exec "$RESTORE" psql -U warroomlive -d warroomlive -tAc "$1"; }
 ship_now() {
-  docker compose -f docker-compose.yml -f docker-compose.backup.yml -f docker-compose.backup-s3.yml \
+  docker compose -f docker-compose.yml --profile backup-s3 \
     exec -T backup-shipper sh -c \
     'RCLONE_CONFIG_CRYPT_PASSWORD=$(rclone obscure "$BACKUP_PASSPHRASE") rclone sync /backups crypt: --exclude "restore-stage/**" --create-empty-src-dirs -q'
 }
