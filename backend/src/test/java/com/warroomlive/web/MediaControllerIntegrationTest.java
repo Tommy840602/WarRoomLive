@@ -64,8 +64,9 @@ class MediaControllerIntegrationTest {
     @Test
     @SuppressWarnings("unchecked")
     void tokenCarriesRoomScopedVideoGrantSignedWithApiSecret() throws Exception {
+        backplane.tryRegister("war-room-token", "alice", "Server Alice", null, 50);
         Map<String, String> body = rest.getForObject(
-                "/api/media/token?room=war-room&identity=alice&name=Alice", Map.class);
+                "/api/media/token?room=war-room-token&identity=alice", Map.class);
 
         SignedJWT jwt = SignedJWT.parse(body.get("token"));
         assertThat(jwt.verify(new MACVerifier("devkey_secret_needs_at_least_32_bytes".getBytes())))
@@ -75,10 +76,10 @@ class MediaControllerIntegrationTest {
         var claims = jwt.getJWTClaimsSet();
         assertThat(claims.getIssuer()).isEqualTo("devkey");
         assertThat(claims.getSubject()).isEqualTo("alice");
-        assertThat(claims.getStringClaim("name")).isEqualTo("Alice");
+        assertThat(claims.getStringClaim("name")).isEqualTo("Server Alice");
         Map<String, Object> video = (Map<String, Object>) claims.getClaim("video");
         assertThat(video)
-                .containsEntry("room", "war-room")
+                .containsEntry("room", "war-room-token")
                 .containsEntry("roomJoin", true)
                 .containsEntry("canPublish", true)
                 .containsEntry("canSubscribe", true);
@@ -89,5 +90,12 @@ class MediaControllerIntegrationTest {
     void missingParamsAreRejected() {
         ResponseEntity<String> response = rest.getForEntity("/api/media/token?room=&identity=x", String.class);
         assertThat(response.getStatusCode().value()).isEqualTo(400);
+    }
+
+    @Test
+    void tokenIsRefusedUntilTheSignalingPeerHasJoined() {
+        ResponseEntity<String> response = rest.getForEntity(
+                "/api/media/token?room=not-joined&identity=intruder", String.class);
+        assertThat(response.getStatusCode().value()).isEqualTo(403);
     }
 }

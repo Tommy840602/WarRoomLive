@@ -4,9 +4,9 @@
 `:80` / `:443` 已經被既有的 reverse proxy 佔著，所以 WarRoomLive **不自己起 edge**——
 它把 frontend 綁在 loopback，由既有的 proxy 轉進來。
 
-> 這也是為什麼**不要**在這台機器上用 `the `tls` feature`：那個功能會自己起一個
+> 這也是為什麼**不要**在這台機器上用 `tls` 功能：它會自己起一個
 > Caddy 綁 `:80`/`:443`，跟已經握著那兩個 port 的 edge 直接相撞。用
-> `the `prod` feature`。
+> `prod` 功能。
 
 ---
 
@@ -17,7 +17,7 @@
 | 問題 | 為什麼重要 |
 |---|---|
 | 既有的 edge 是 Caddy 還是 nginx？ | 決定用 `infrastructure/edge/` 底下哪一份設定 |
-| `:8088` 在這台機器上是空的嗎？ | 被佔用就改 `WARROOM_PORT`，edge 設定要跟著改 |
+| `:8088` 在這台機器上是空的嗎？ | 被佔用就改 `FRONTEND_PORT`，edge 設定要跟著改 |
 | 要不要超過 8 人同時開？ | 決定要不要 SFU，而 SFU 需要**額外開對外 port**（見下方「媒體」） |
 
 檢查 port：
@@ -59,7 +59,7 @@ $EDITOR .env.prod          # DB_PASSWORD 必填，PUBLIC_ORIGIN 已預填
 `DB_PASSWORD` 用 `openssl rand -base64 32` 產。**這個值之後很難改**——它會寫進
 Postgres 的 volume，事後要改得連 volume 一起處理。
 
-> 沒填 `DB_PASSWORD` 或 `PUBLIC_ORIGIN` 的話 compose 會直接拒絕啟動。這是刻意的：
+> 沒填 `DB_PASSWORD` 或 `PUBLIC_ORIGIN` 的話 launcher 會直接拒絕啟動。這是刻意的：
 > 這個 repo 到處都有開發用的預設密碼，用預設值跑在有公開位址的機器上，是那種不該
 > 「因為忘了」而發生的事。
 
@@ -68,7 +68,8 @@ Postgres 的 volume，事後要改得連 volume 一起處理。
 ## 3. 啟動 stack
 
 ```bash
-docker compose --env-file .env.prod  -f docker-compose.yml -f the `prod` feature up -d --build
+set -a && . ./.env.prod && set +a
+./stack.sh up prod -d --build
 ```
 
 確認它活著（此時只有 loopback 通）：
@@ -158,7 +159,7 @@ done; echo
 ```
 
 看到全部 429、或第一個請求就 429，代表 `real-ip.conf` 沒生效——所有人被算成同一個
-呼叫端了。確認 `the `prod` feature` 有掛上它：
+呼叫端了。確認 `prod` 功能有掛上它：
 
 ```bash
 docker compose exec frontend ls /etc/nginx/conf.d/
@@ -175,8 +176,8 @@ reverse proxy 代理不了。這決定了要不要動防火牆：
 | 模式 | 對外要開的 port | 何時需要 |
 |---|---|---|
 | **Mesh（預設）** | 無 | ≤8 人，且雙方 NAT 不算嚴格。媒體點對點直連，伺服器只轉信令 |
-| **+ TURN**（`the `turn` feature`） | `3478/tcp`、`3478/udp`、`49160-49200/udp` | 有人在嚴格 NAT／企業網路後面連不上時 |
-| **SFU**（`the `sfu` feature`） | `7881/tcp`、`7882/udp` | 要超過 8 人 |
+| **+ TURN**（`turn` 功能） | `3478/tcp`、`3478/udp`、`49160-49200/udp` | 有人在嚴格 NAT／企業網路後面連不上時 |
+| **SFU**（`sfu` 功能） | `7881/tcp`、`7882/udp` | 要超過 8 人 |
 
 先用預設的 mesh 上線，遇到「有人看不到彼此」再加 TURN。多開 port 之前先確認沒有跟
 `twin` 那邊撞到：
@@ -185,12 +186,13 @@ reverse proxy 代理不了。這決定了要不要動防火牆：
 ss -ulnp | grep -E ':(3478|7882|49160)\b'
 ```
 
-加 TURN 時 `.env.prod` 要設 `TURN_PUBLIC_HOST=live.tommy-huang.dev`，而且
-**coturn 的預設帳密是開發用的**（`warroom:warroomsecret`，寫死在
-`the `turn` feature` 裡），對外開放前務必換掉，或改用 `--use-auth-secret`。
+加 TURN 時 `.env.prod` 要設 `TURN_PUBLIC_HOST=live.tommy-huang.dev`、
+`TURN_USERNAME` 與 `TURN_PASSWORD`。`prod turn` 會拒絕 localhost 與 repo 的開發帳密，
+避免不小心公開一台免費流量中繼；啟動指令加上 `turn` 即可。
 一個公開的、憑證是公開值的 TURN relay，就是一台免費的流量中繼。
 
-SFU 還要在 `infrastructure/livekit/livekit.yaml` 設 `rtc.node_ip: 178.104.225.148`——
+SFU 需在 `.env.prod` 設一組真正的 `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET`，還要在
+`infrastructure/livekit/livekit.yaml` 設 `rtc.node_ip: 178.104.225.148`——
 瀏覽器要直接連到那個位址，不是容器網路的內部 IP。
 
 ---
@@ -200,7 +202,8 @@ SFU 還要在 `infrastructure/livekit/livekit.yaml` 設 `rtc.node_ip: 178.104.22
 預設**全部保留永久**。要開就改 `.env.prod` 的 `RETENTION_*_DAYS` 再重啟 backend：
 
 ```bash
-docker compose --env-file .env.prod  -f docker-compose.yml -f the `prod` feature up -d backend
+set -a && . ./.env.prod && set +a
+./stack.sh up prod -d backend
 ```
 
 第一次開的時候要有心理準備：如果資料庫裡已經有超過期限的資料，第一輪掃描就會刪。
@@ -213,7 +216,8 @@ docker compose --env-file .env.prod  -f docker-compose.yml -f the `prod` feature
 ```bash
 cd /srv/warroomlive
 git pull
-docker compose --env-file .env.prod  -f docker-compose.yml -f the `prod` feature up -d --build
+set -a && . ./.env.prod && set +a
+./stack.sh up prod -d --build
 ```
 
 Flyway 會在 backend 啟動時自己跑 migration。升級期間房間會斷線，但前端會自動重連並
@@ -240,7 +244,6 @@ docker compose exec -T db pg_dump -U warroomlive warroomlive | gzip > warroom-$(
 
 ## 需要登入才能進房（選用）
 
-預設不需要登入。要接自己的 IdP（Keycloak／Entra）時用 `oidc` profile，
-**不要**把 `the `oidc` feature` 直接搬上來——那個功能裡的 `devidp` 是
-開發用的假 IdP（固定帳密 alice/bob、記憶體金鑰），對外部署等於開一道無條件的門。
-要用的是它的 `OIDC_*` 環境變數指向真的 IdP。
+預設不需要登入。要接自己的 IdP（Keycloak／Entra），先在 `.env.prod` 填
+`OIDC_ISSUER`、`OIDC_JWK_SET_URI`、`OIDC_CLIENT_ID`，再用 `./stack.sh up prod oidc ...`。
+選了 `prod` 後 launcher 不會啟動固定帳密的 `devidp`，缺少真實 IdP 設定也會拒絕啟動。

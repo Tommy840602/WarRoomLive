@@ -1,13 +1,13 @@
 # Site block for an existing Caddy edge that already serves other hosts on this
 # machine. Add it to that Caddyfile (or drop it in the directory that Caddyfile
 # imports) and reload — do not start a second Caddy, and do not use this
-# repository's docker-compose.tls.yml here: it binds :80/:443 and would collide
+# repository's `tls` feature here: it binds :80/:443 and would collide
 # with the edge already holding them.
 #
 #   caddy validate --config /etc/caddy/Caddyfile
 #   systemctl reload caddy        # or: docker compose exec caddy caddy reload …
 #
-# WARROOM_PORT must match docker-compose.prod.yml (default 8088). The stack
+# FRONTEND_PORT must match .env.prod (default 8088). The stack
 # binds it to loopback, so this proxy is the only way in.
 live.tommy-huang.dev {
 	# reverse_proxy handles WebSocket upgrades transparently, so /ws/signal and

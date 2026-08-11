@@ -78,6 +78,7 @@ public class RecordingLibraryController {
     public List<Map<String, Object>> list(@PathVariable String room,
             @RequestParam(defaultValue = "" + DEFAULT_LIMIT) int limit,
             @RequestParam(defaultValue = "0") int offset) {
+        authorization.requireRoomMember(room, "list recordings");
         return store()
                 .forRoom(room, Pages.limit(limit, DEFAULT_LIMIT, MAX_LIMIT), Pages.offset(offset))
                 .stream().map(RecordingLibraryController::describe).toList();
@@ -89,6 +90,7 @@ public class RecordingLibraryController {
      */
     @GetMapping("/{room}/{id}/url")
     public Map<String, String> playbackUrl(@PathVariable String room, @PathVariable long id) {
+        authorization.requireRoomMember(room, "play recordings");
         if (bucket.isBlank() || accessKey.isBlank()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "recording storage is not configured");
         }
@@ -117,14 +119,11 @@ public class RecordingLibraryController {
      * one", which is the request a person actually makes. It is irreversible by
      * design — the point is that the file stops existing.
      *
-     * <p><strong>Host-gated when the room can say who its host is.</strong> Since
-     * the signaling handshake binds each peer to its authenticated subject, the
-     * room's host is now a person rather than just a peer id, and this endpoint
-     * can require that person. When the room is empty (nobody to host it) or the
-     * deployment has no identity provider (nobody to be), there is no such
-     * subject and the endpoint falls back to the API's ordinary protection —
-     * with attribution on the event either way. Gating on something the caller
-     * supplies would only look like authorization.
+     * <p><strong>Host-gated.</strong> In OIDC mode the signaling handshake binds
+     * the live host peer to its authenticated subject and the endpoint fails
+     * closed if that membership cannot be proven. Anonymous development mode
+     * retains the local, zero-dependency behaviour. Gating on a caller-supplied
+     * identity would only look like authorization.
      */
     @DeleteMapping("/{room}/{id}")
     public Map<String, Object> delete(@PathVariable String room, @PathVariable long id) {

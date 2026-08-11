@@ -106,7 +106,7 @@ docker compose up --build
 - **切換是單向的,直到房間清空為止**。掉回 8 人不會切回 mesh:換傳輸方式要所有人重新協商一次,在門檻附近進出的房間會整場都在拆了重建。這個閂鎖存在 `Backplane.RoomState.sfu`,只會從未設定變成設定(所以不需要自己的原子性),房間空掉時跟著房間狀態一起消失。
 - **中途跨過門檻的房間會被通知**。用的是既有的 `room-state` ——它本來就會發給每個加入者、也會在每次變更時重播,而傳輸方式正好就是「每個加入者都要知道、改變時每個人都要被告知」的東西。前端收到就把 `WebRtcRoom` 換成 `SfuRoom`,**信令 socket 和本地 stream 都沿用**,所以聊天、筆記、議程、字幕在切換期間完全不中斷;使用者看到的是視訊格閃一下,而不是重新連線。
 - 後端 `/api/media/config?room=X` 回答**那個房間**現在走哪一種,前端據此建立對應的 `MediaRoom`;未部署 SFU 時一律 mesh,這也是為什麼硬上限存在。
-- 後端 `/api/media/token` 以 API secret 簽發**限單一房間**的 LiveKit access token(HS256 video grant);secret 不出伺服器。啟用 `oidc` profile 時此端點自動要求登入。
+- 後端 `/api/media/token` 只在信令伺服器已接受該 peer 加入房間後，才以 API secret 簽發**限單一房間**的 LiveKit access token(HS256 video grant)；OIDC 模式還會要求 peer 綁定的 subject 等於 HTTP caller，顯示名稱取自伺服器的房間目錄而非 request。secret 不出伺服器。
 - LiveKit 信令 WebSocket 由 nginx 代理在同 origin 的 `/livekit`;媒體(SRTP)直接走 SFU 的 RTC 埠(7881/tcp、7882/udp)。瀏覽器無法直達容器網路的環境(macOS/Windows 或對外部署)請在 `infrastructure/livekit/livekit.yaml` 設 `rtc.node_ip`。
 - 房間人數上限(信令層)在此模式放寬到 50;聊天、筆記、表情、舉手等仍走原本的 signaling WebSocket,完全不受媒體傳輸方式影響。
 
@@ -130,7 +130,7 @@ docker compose up --build
 ./stack.sh up sfu recording --build
 ```
 
-- 房間內(SFU 模式)出現「錄影」按鈕:後端呼叫 **LiveKit Egress** 的 twirp API 啟動 room-composite 錄影(headless Chrome 合成畫面),MP4 直接上傳 **MinIO**(S3 API,bucket `recordings`);LiveKit secret 與儲存憑證都不出後端。離開房間時自動停止。
+- 房間內(SFU 模式)出現「錄影」按鈕：只有伺服器確認的當前主持人能啟動；回傳的短效控制 capability 綁定 room、Egress id 與主持人，停止時再次驗證，且放在 POST body 而不是 URL。後端呼叫 **LiveKit Egress** 的 twirp API 啟動 room-composite 錄影(headless Chrome 合成畫面)，MP4 直接上傳 **MinIO**(S3 API,bucket `recordings`)；LiveKit secret 與儲存憑證都不出後端。離開房間時自動停止。
 - **錄影清單與播放**:錄完的影片會列在房間側邊(時間、長度、大小),點播放即在頁面內播。播放走**預簽 URL**——資料庫只存物件 key,每次點播放才即時簽發一條 30 分鐘有效的連結,物件儲存的憑證永遠不出後端,影音位元組也不經過後端(nginx 直接把請求轉給物件儲存)。webhook 寫入的錄影列與事件同交易提交,重送不會產生重複。
 - **完成通知走 webhook**:LiveKit 以「body 雜湊 JWT」簽名回呼 `/api/livekit/webhook`(後端驗簽),搭配 `events` 功能時轉成 `meeting.recording.completed` 事件進骨幹。
 - **刪除**:清單上每筆有刪除鍵(兩段式確認,不用會卡住整頁的 `confirm()`)。`DELETE /api/recordings/{room}/{id}` **先刪物件、再刪列**——物件刪不掉就把列留著等重試,反過來會留下沒人指得到的檔案。刪除會發 `meeting.recording.deleted` 事件,帶 `reason` 與 `actor`(有登入時是 JWT subject)。
@@ -151,6 +151,7 @@ docker compose up --build
 - **devidp** 是隨附的**僅供開發** IdP(固定測試帳號、記憶體金鑰),掛在同一 origin 的 `/auth` 之下。整個系統只講標準 OIDC(discovery + JWKS)——正式環境把 `OIDC_ISSUER` / `OIDC_JWK_SET_URI` / `OIDC_CLIENT_ID` 指向 Keycloak / Entra ID 等真正的 IdP 即可(例如 Keycloak 以 `KC_HTTP_RELATIVE_PATH=/auth` 掛同路徑),移除 devidp 服務。
 - 換網域/埠時設 `PUBLIC_ORIGIN`(預設 `http://localhost:8088`),JWT 的 `iss` 與前端 authority 都由它導出。
 - **Token 生命週期**:devidp 發 refresh token(單次使用、每次輪替),前端 `automaticSilentRenew` 在到期前自動換新;後端在 WS 握手時記下 token 到期時間,**逐訊息檢查**——過期連線以 close code `4401` 切斷,client 需以新 token 重連。長連線不會比憑證活得久。
+- **房間資源 ACL**：OIDC caller 必須同時是 backplane 中的即時房間成員，才能讀寫該房間的錄影、檔案、逐字稿、摘要、會議、待辦與行事曆；刪除與錄影控制再加主持人檢查。空房或缺少 subject 時一律 fail-closed。尚未有持久跨房間 ACL，因此登入模式不提供全域訊息搜尋。
 
 ## TURN fallback(選用功能)
 
@@ -210,7 +211,7 @@ docker compose up --build
 後端在 `/actuator/prometheus`(信令連線數、各類型訊息進出計數、處理耗時、房間/成員 gauge),collab 在 `/metrics`(update 計數與大小分佈、fetch/store 耗時、被拒連線計數、連線/開啟文件 gauge),indexer 在 `:9400/metrics`;與 `SFU` 功能併用時也抓 LiveKit 的 WebRTC 品質指標(`livekit:6789`)。皆不經 nginx 代理,只在 compose 網路內可達。
 
 此功能還包含:
-- **分散式追蹤**:後端以 OTLP 送 **Tempo**(overlay 設 `TRACING_ENABLED=true`;預設關閉零成本),Grafana 已接 Tempo datasource。
+- **分散式追蹤**:後端以 OTLP 送 **Tempo**(`observability` 功能設 `TRACING_ENABLED=true`;預設關閉零成本),Grafana 已接 Tempo datasource。
 - **Grafana dashboard**「WarRoomLive Overview」自動 provision(連線數、訊息速率、CRDT update、事件 backlog/發布率等)。
 - **告警規則**(`infrastructure/observability/alerts.yml`):scrape target down、outbox backlog 累積、collab 拒連暴增、信令處理超過 20ms SLO。
 - **告警通知路由**(`infrastructure/observability/alertmanager.yml`,`:9093`):分組(alertname + severity)、critical 走快速通道(group_wait 5s)、**抑制規則**(某 job 的 scrape target 掛掉時,壓下同 job 的 warning 告警——它們的指標本來就已失真)。開發用接收端是 `alert-logger` webhook 容器,可用 `docker compose logs alert-logger` 直接看到通知送達;正式環境只換 receivers(Slack/Email/PagerDuty),路由樹不動。
@@ -263,7 +264,7 @@ tests/dr/restore-drill.sh
 tests/dr/restore-s3-drill.sh
 ```
 
-- **備份與 DR**:`backup` 功能開 WAL 歸檔;backup-`s3` 功能再以 rclone `crypt` remote 把基礎備份與 WAL **客戶端加密**後同步進 MinIO(連檔名都是密文),還原演練完全只靠 bucket。詳見 `docs/runbooks/disaster-recovery.md`。
+- **備份與 DR**:`backup` 功能開 WAL 歸檔;`backup-s3` 功能再以 rclone `crypt` remote 把基礎備份與 WAL **客戶端加密**後同步進 MinIO(連檔名都是密文),還原演練完全只靠 bucket。詳見 `docs/runbooks/disaster-recovery.md`。
 - **壓測**:`tests/load/`(k6 信令 SLO 壓測、`crdt-replay.mjs` CRDT 冷重建基準、`rtc-load.sh` LiveKit 媒體壓測)與 `tests/chaos/`(Toxiproxy)。實測數字與抓到的缺陷記在 `docs/runbooks/load-testing.md`。
 - **Redis 故障轉移演練**:`tests/ha/failover-drill.sh`(見上方 `HA` 功能)。
 
@@ -271,12 +272,13 @@ tests/dr/restore-s3-drill.sh
 
 ## 部署到已經有其他站台的機器
 
-機器上 `:80`/`:443` 已經被別的站台的 reverse proxy 佔著時,用 `the `prod` feature`
+機器上 `:80`/`:443` 已經被別的站台的 reverse proxy 佔著時,用 `prod` 功能
 而**不是** `TLS` 功能——後者會自己起一個 Caddy 綁那兩個 port,直接相撞。
 
 ```bash
 cp .env.prod.example .env.prod && chmod 600 .env.prod   # DB_PASSWORD 必填
-docker compose --env-file .env.prod  -f docker-compose.yml -f the `prod` feature up -d --build
+set -a && . ./.env.prod && set +a
+./stack.sh up prod -d --build
 ```
 
 - frontend **只綁 loopback**,由既有的 edge 轉進來;`infrastructure/edge/` 有 Caddy 與 nginx 兩份 site 設定可以直接抄。
@@ -288,7 +290,7 @@ docker compose --env-file .env.prod  -f docker-compose.yml -f the `prod` feature
 
 ## 正式對外:HTTPS(TLS 反向代理,WarRoomLive 獨佔整台機器時)
 
-用 Caddy 當邊緣代理,自動取得憑證。這是**選用的功能**(`the `tls` feature`),不影響上面的簡易部署。
+用 Caddy 當邊緣代理,自動取得憑證。這是**選用的功能**(`tls`),不影響上面的簡易部署。
 
 **正式環境**(真實網域,自動 Let's Encrypt,需 80/443 對外可達):
 

@@ -36,24 +36,32 @@ export class SfuRoom implements MediaRoom {
   private readonly room = new Room({ adaptiveStream: true, dynacast: true })
   /** One synthetic MediaStream per remote identity, feeding the existing VideoTile UI. */
   private readonly remoteStreams = new Map<string, MediaStream>()
+  private connecting = false
 
   constructor(
     private readonly signaling: SignalingClient,
     private readonly selfId: string,
     private readonly localStream: MediaStream,
     private readonly events: WebRtcRoomEvents,
-    private readonly livekit: { url: string; token: string },
+    private readonly livekit: { url: string; token: () => Promise<string> },
   ) {}
 
   join(roomName: string, displayName: string): void {
     // Same signaling join as mesh mode: drives membership, names, chat, history.
     this.signaling.on('error', (msg) => this.events.onError?.(String(msg.payload)))
+    // The backend will issue media capabilities only to a signaling peer it has
+    // already accepted. `peers` is that acknowledgement, so request the token
+    // afterwards rather than racing the HTTP call ahead of the join.
+    const off = this.signaling.on('peers', () => {
+      off()
+      void this.connectMedia()
+    })
     this.signaling.send({ type: 'join', room: roomName, from: this.selfId, payload: displayName })
-
-    void this.connectMedia()
   }
 
   private async connectMedia(): Promise<void> {
+    if (this.connecting) return
+    this.connecting = true
     try {
       this.room
         .on(RoomEvent.TrackSubscribed, (track, _pub, participant) =>
@@ -72,7 +80,7 @@ export class SfuRoom implements MediaRoom {
           this.onQualityChanged(quality, participant),
         )
 
-      await this.room.connect(this.livekit.url, this.livekit.token)
+      await this.room.connect(this.livekit.url, await this.livekit.token())
 
       const audio = this.localStream.getAudioTracks()[0]
       const video = this.localStream.getVideoTracks()[0]
@@ -85,6 +93,8 @@ export class SfuRoom implements MediaRoom {
       }
     } catch (e) {
       this.events.onError?.(`SFU 連線失敗:${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      this.connecting = false
     }
   }
 
@@ -188,10 +198,9 @@ export async function fetchMediaConfig(
 export async function fetchMediaToken(
   room: string,
   identity: string,
-  name: string,
   token?: string | null,
 ): Promise<string> {
-  const params = new URLSearchParams({ room, identity, name })
+  const params = new URLSearchParams({ room, identity })
   const res = await fetch(`/api/media/token?${params}`, { headers: authHeaders(token) })
   if (!res.ok) throw new Error(`無法取得 SFU token(HTTP ${res.status})`)
   return ((await res.json()) as { token: string }).token

@@ -33,6 +33,15 @@ describe('SearchPanel', () => {
     expect(onSearch).toHaveBeenLastCalledWith('deploy', false, 0)
   })
 
+  it('cannot leave room scope when global search is not authorized', async () => {
+    const onSearch = vi.fn().mockResolvedValue([hit('deploy plan')])
+    render(<SearchPanel onSearch={onSearch} allowGlobal={false} />)
+
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    await search('deploy')
+    expect(onSearch).toHaveBeenCalledWith('deploy', true, 0)
+  })
+
   it('distinguishes no matches from no search', async () => {
     // Before the first query there is nothing to say; after one that matched
     // nothing there is.

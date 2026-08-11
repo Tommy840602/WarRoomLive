@@ -1,4 +1,4 @@
-# LiveKit SFU config for the sfu overlay (local/dev defaults).
+# LiveKit SFU config for the sfu feature (local/dev defaults).
 #
 # Signaling WebSocket (:7880) is proxied by the frontend nginx at /livekit;
 # media (SRTP) flows directly between browsers and the published RTC ports.
@@ -6,13 +6,13 @@
 # (macOS/Windows, or remote users), set rtc.node_ip to a reachable address.
 port: 7880
 # WebRTC quality metrics (packet loss, RTT, bitrate…) for the observability
-# overlay's Prometheus (target livekit:6789; down when this overlay is off).
+# observability feature's Prometheus (target livekit:6789; down when SFU is off).
 prometheus_port: 6789
 rtc:
   tcp_port: 7881
   udp_port: 7882
   use_external_ip: false
-# Must match LIVEKIT_API_KEY / LIVEKIT_API_SECRET in docker-compose.sfu.yml.
+# Overridden by LIVEKIT_KEYS from Compose; these values are local defaults.
 keys:
   devkey: devkey_secret_needs_at_least_32_bytes
 logging:

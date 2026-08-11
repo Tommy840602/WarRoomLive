@@ -97,6 +97,7 @@ public class AttachmentController {
      */
     @PostMapping("/{room}/upload-url")
     public Map<String, Object> uploadUrl(@PathVariable String room, @RequestBody UploadRequest request) {
+        authorization.requireRoomMember(room, "upload files");
         requireConfigured();
         if (request.filename() == null || request.filename().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "filename is required");
@@ -122,6 +123,7 @@ public class AttachmentController {
      */
     @PostMapping("/{room}")
     public Map<String, Object> confirm(@PathVariable String room, @RequestBody ConfirmRequest request) {
+        authorization.requireRoomMember(room, "confirm file uploads");
         requireConfigured();
         String objectKey = request.objectKey() == null ? "" : request.objectKey();
         // A key from another room would let a caller list someone else's file
@@ -159,6 +161,7 @@ public class AttachmentController {
     public List<Map<String, Object>> list(@PathVariable String room,
             @RequestParam(defaultValue = "" + DEFAULT_LIMIT) int limit,
             @RequestParam(defaultValue = "0") int offset) {
+        authorization.requireRoomMember(room, "list files");
         requireConfigured();
         return store()
                 .forRoom(room, Pages.limit(limit, DEFAULT_LIMIT, MAX_LIMIT), Pages.offset(offset))
@@ -168,6 +171,7 @@ public class AttachmentController {
     /** A fresh download URL, minted per request so access cannot outlive the asking. */
     @GetMapping("/{room}/{id}/url")
     public Map<String, String> downloadUrl(@PathVariable String room, @PathVariable long id) {
+        authorization.requireRoomMember(room, "download files");
         requireConfigured();
         AttachmentEntity attachment = find(room, id);
         String signed = objects.presign("GET", attachment.getObjectKey(), DOWNLOAD_TTL);

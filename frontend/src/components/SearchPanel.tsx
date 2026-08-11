@@ -14,6 +14,8 @@ const PAGE = 25
 interface SearchPanelProps {
   /** Runs a query. Rejects when the search projection is not available. */
   onSearch: (query: string, thisRoomOnly: boolean, offset: number) => Promise<SearchHit[]>
+  /** Global search needs a persistent cross-room ACL, which OIDC mode does not yet grant. */
+  allowGlobal?: boolean
 }
 
 /**
@@ -27,7 +29,7 @@ interface SearchPanelProps {
  * <p>Scoped to this room by default. A war room is where you look for something
  * you said <em>here</em>; searching everywhere is the deliberate act.
  */
-export function SearchPanel({ onSearch }: SearchPanelProps) {
+export function SearchPanel({ onSearch, allowGlobal = true }: SearchPanelProps) {
   const [query, setQuery] = useState('')
   const [thisRoomOnly, setThisRoomOnly] = useState(true)
   const [hits, setHits] = useState<SearchHit[] | null>(null)
@@ -75,18 +77,20 @@ export function SearchPanel({ onSearch }: SearchPanelProps) {
         </button>
       </form>
 
-      <label className="search__scope">
-        <input
-          type="checkbox"
-          checked={thisRoomOnly}
-          onChange={(e) => {
-            setThisRoomOnly(e.target.checked)
-            // The old results answered a different question.
-            setHits(null)
-          }}
-        />
-        只搜尋這個房間
-      </label>
+      {allowGlobal && (
+        <label className="search__scope">
+          <input
+            type="checkbox"
+            checked={thisRoomOnly}
+            onChange={(e) => {
+              setThisRoomOnly(e.target.checked)
+              // The old results answered a different question.
+              setHits(null)
+            }}
+          />
+          只搜尋這個房間
+        </label>
+      )}
 
       {error && <p className="search__error">⚠️ {error}</p>}
 

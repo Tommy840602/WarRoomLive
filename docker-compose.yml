@@ -19,9 +19,9 @@
 # of a single file, and it is why the launcher still exists: the table of what
 # each feature switches on lives in stack.sh, on one screen.
 #
-# You can drive compose directly if you prefer — `docker compose --profile oidc
-# up` — but then the env for that feature is yours to set. stack.sh exists so
-# that pairing is not something to remember.
+# You can drive compose directly if you prefer, but then both profile names and
+# the environment for each feature are yours to set. stack.sh exists so that
+# pairing — including dev-vs-production profiles — is not something to remember.
 #
 # ONE RULE WORTH KNOWING if you edit this: an always-on service may not
 # `depends_on` a profile-gated one. Compose rejects the whole project with
@@ -179,7 +179,7 @@ services:
   # OIDC_JWK_SET_URI / OIDC_CLIENT_ID at Keycloak, Entra ID or similar.
   devidp:
     build: ./devidp
-    profiles: [oidc]
+    profiles: [oidc-dev]
     restart: ${RESTART_POLICY:-no}
     environment:
       PORT: "8089"
@@ -192,7 +192,7 @@ services:
   # than inventing a translation. A fixture. Do not point real meetings at it.
   devai:
     build: ./devai
-    profiles: [ai]
+    profiles: [ai-dev]
     restart: ${RESTART_POLICY:-no}
     environment:
       PORT: "8090"
@@ -237,6 +237,11 @@ services:
     profiles: [sfu, recording]
     restart: ${RESTART_POLICY:-no}
     command: --config /etc/livekit.yaml
+    environment:
+      # CLI/environment settings override the file's development placeholders,
+      # so one generated secret reaches the SFU, webhook signer and backend.
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-devkey_secret_needs_at_least_32_bytes}"
+      LIVEKIT_WEBHOOK_API_KEY: ${LIVEKIT_API_KEY:-devkey}
     volumes:
       # `recording` swaps in the config that points LiveKit at Redis for egress.
       - ./infrastructure/livekit/${LIVEKIT_CONFIG:-livekit.yaml}:/etc/livekit.yaml:ro
@@ -250,6 +255,8 @@ services:
     restart: ${RESTART_POLICY:-no}
     environment:
       EGRESS_CONFIG_FILE: /etc/egress.yaml
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devkey_secret_needs_at_least_32_bytes}
     volumes:
       - ./infrastructure/livekit/egress.yaml:/etc/egress.yaml:ro
     shm_size: "2gb" # headless Chrome compositing
@@ -263,16 +270,20 @@ services:
     restart: ${RESTART_POLICY:-no}
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: warroom
-      MINIO_ROOT_PASSWORD: warroomsecret
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-warroom}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-warroomsecret}
     volumes:
       - recordings:/data
 
   minio-init:
     image: minio/mc:latest
     profiles: [recording]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-warroom}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-warroomsecret}
+      EGRESS_S3_BUCKET: ${EGRESS_S3_BUCKET:-recordings}
     entrypoint: ["/bin/sh", "-c",
-      "until mc alias set local http://minio:9000 warroom warroomsecret; do sleep 1; done; mc mb -p local/recordings"]
+      "until mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD; do sleep 1; done; mc mb -p local/$$EGRESS_S3_BUCKET"]
     depends_on:
       - minio
 
@@ -392,9 +403,12 @@ services:
     image: coturn/coturn:4
     profiles: [turn]
     restart: ${RESTART_POLICY:-no}
+    environment:
+      TURN_USERNAME: ${TURN_USERNAME:-warroom}
+      TURN_PASSWORD: ${TURN_PASSWORD:-warroomsecret}
     command: >-
       -n --log-file=stdout --fingerprint --lt-cred-mech
-      --realm=warroomlive --user=warroom:warroomsecret
+      --realm=warroomlive --user=${TURN_USERNAME:-warroom}:${TURN_PASSWORD:-warroomsecret}
       --listening-port=3478 --min-port=49160 --max-port=49200
       --no-tls --no-dtls
     ports:
@@ -429,12 +443,12 @@ services:
   # at real S3/GCS by swapping the endpoint and credentials.
   minio-backup:
     image: minio/minio:latest
-    profiles: [backup-s3]
+    profiles: [backup-s3-dev]
     restart: ${RESTART_POLICY:-no}
     command: server /data
     environment:
-      MINIO_ROOT_USER: warroom
-      MINIO_ROOT_PASSWORD: warroomsecret
+      MINIO_ROOT_USER: ${RCLONE_CONFIG_S3_ACCESS_KEY_ID:-warroom}
+      MINIO_ROOT_PASSWORD: ${RCLONE_CONFIG_S3_SECRET_ACCESS_KEY:-warroomsecret}
     volumes:
       - minio-backup-data:/data
 
@@ -445,10 +459,10 @@ services:
     entrypoint: ["/bin/sh", "/shipper.sh"]
     environment:
       RCLONE_CONFIG_S3_TYPE: s3
-      RCLONE_CONFIG_S3_PROVIDER: Minio
-      RCLONE_CONFIG_S3_ENDPOINT: http://minio-backup:9000
-      RCLONE_CONFIG_S3_ACCESS_KEY_ID: warroom
-      RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: warroomsecret
+      RCLONE_CONFIG_S3_PROVIDER: ${RCLONE_CONFIG_S3_PROVIDER:-Minio}
+      RCLONE_CONFIG_S3_ENDPOINT: ${RCLONE_CONFIG_S3_ENDPOINT:-http://minio-backup:9000}
+      RCLONE_CONFIG_S3_ACCESS_KEY_ID: ${RCLONE_CONFIG_S3_ACCESS_KEY_ID:-warroom}
+      RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: ${RCLONE_CONFIG_S3_SECRET_ACCESS_KEY:-warroomsecret}
       RCLONE_CONFIG_CRYPT_TYPE: crypt
       RCLONE_CONFIG_CRYPT_REMOTE: "s3:${BACKUP_BUCKET:-warroom-backups}"
       BACKUP_BUCKET: ${BACKUP_BUCKET:-warroom-backups}
@@ -457,8 +471,6 @@ services:
     volumes:
       - backups:/backups:ro
       - ./infrastructure/backup/shipper.sh:/shipper.sh:ro
-    depends_on:
-      - minio-backup
 
 volumes:
   pgdata:

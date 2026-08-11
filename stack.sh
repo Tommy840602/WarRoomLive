@@ -23,30 +23,53 @@ cd "$(dirname "$0")"
 
 FEATURES=(oidc ai events observability turn sfu recording scale ha backup backup-s3 tls prod)
 
-# Features that need a compose profile to start their services. `backup` and
-# `prod` have no services of their own — they only change settings.
-declare -A PROFILE=(
-  [oidc]=oidc [ai]=ai [events]=events [observability]=observability
-  [turn]=turn [sfu]=sfu [recording]=recording [scale]=scale [ha]=ha
-  [backup-s3]=backup-s3 [tls]=tls
-)
+# Keep these lookups as case statements rather than associative arrays. macOS
+# still ships Bash 3.2, which supports indexed arrays but not `declare -A`.
+profiles_for() {
+  case "$1" in
+    oidc) [ "$PRODUCTION" = "1" ] || echo oidc-dev ;;
+    ai) [ "$PRODUCTION" = "1" ] || echo ai-dev ;;
+    events|observability|turn|sfu|recording|scale|ha|tls) echo "$1" ;;
+    backup-s3)
+      echo backup-s3
+      [ "$PRODUCTION" = "1" ] || echo backup-s3-dev
+      ;;
+  esac
+  return 0
+}
 
-# Spring profiles each feature contributes. Unioned, never overwritten.
-declare -A SPRING=(
-  [oidc]=oidc [ai]=ai [events]=kafka [scale]=redis [ha]="redis redisha"
-)
+spring_for() {
+  case "$1" in
+    oidc) echo oidc ;;
+    ai) echo ai ;;
+    events) echo kafka ;;
+    scale) echo redis ;;
+    ha) echo "redis redisha" ;;
+  esac
+  return 0
+}
 
-declare -A NEEDS=([recording]=sfu [ha]=scale [backup-s3]=backup)
+needs_for() {
+  case "$1" in
+    recording) echo sfu ;;
+    ha) echo scale ;;
+    backup-s3) echo backup ;;
+  esac
+  return 0
+}
 
 usage() {
   cat <<USAGE
 usage: ./stack.sh <command> [feature ...] [docker compose args]
 
 features   ${FEATURES[*]}
-           all = everything that can coexist (excludes tls and prod, which
-           both take over the edge, and turn, which wants a real host address)
+           all = the development stack (excludes tls, prod and turn).
 
            recording implies sfu; ha implies scale; backup-s3 implies backup.
+
+oidc and ai use bundled development stand-ins unless prod is selected.
+With prod, real provider settings and every selected feature's secrets are
+required; the launcher never starts devidp, devai or the backup MinIO fixture.
 USAGE
 }
 
@@ -55,9 +78,9 @@ USAGE
 settings_for() {
   case "$1" in
     oidc)
-      add OIDC_ISSUER "${PUBLIC_ORIGIN:-http://localhost:8088}/auth"
-      add OIDC_JWK_SET_URI http://devidp:8089/auth/jwks
-      add OIDC_CLIENT_ID warroomlive-web
+      add OIDC_ISSUER "${OIDC_ISSUER:-${PUBLIC_ORIGIN:-http://localhost:8088}/auth}"
+      add OIDC_JWK_SET_URI "${OIDC_JWK_SET_URI:-http://devidp:8089/auth/jwks}"
+      add OIDC_CLIENT_ID "${OIDC_CLIENT_ID:-warroomlive-web}"
       ;;
     ai)
       # Points at the bundled dev stand-in unless the caller named a real one.
@@ -72,27 +95,27 @@ settings_for() {
       add TRACING_ENABLED true
       ;;
     turn)
-      add TURN_URLS "turn:${TURN_PUBLIC_HOST:-localhost}:3478"
-      add TURN_USERNAME warroom
-      add TURN_PASSWORD warroomsecret
+      add TURN_URLS "${TURN_URLS:-turn:${TURN_PUBLIC_HOST:-localhost}:3478}"
+      add TURN_USERNAME "${TURN_USERNAME:-warroom}"
+      add TURN_PASSWORD "${TURN_PASSWORD:-warroomsecret}"
       ;;
     sfu)
       # Path-style: the browser resolves it against the page origin and nginx
       # proxies /livekit, keeping the single-origin setup.
-      add LIVEKIT_URL /livekit
-      add LIVEKIT_API_KEY devkey
-      add LIVEKIT_API_SECRET devkey_secret_needs_at_least_32_bytes
+      add LIVEKIT_URL "${LIVEKIT_URL:-/livekit}"
+      add LIVEKIT_API_KEY "${LIVEKIT_API_KEY:-devkey}"
+      add LIVEKIT_API_SECRET "${LIVEKIT_API_SECRET:-devkey_secret_needs_at_least_32_bytes}"
       # Media no longer costs upload per peer, so the signaling cap can rise.
       # MESH_MAX_PEERS stays 8: rooms still start on the mesh and switch above it.
       add MAX_ROOM_SIZE 50
       ;;
     recording)
       add LIVEKIT_CONFIG livekit-recording.yaml
-      add LIVEKIT_INTERNAL_URL http://livekit:7880
-      add EGRESS_S3_ENDPOINT http://minio:9000
-      add EGRESS_S3_BUCKET recordings
-      add EGRESS_S3_ACCESS_KEY warroom
-      add EGRESS_S3_SECRET_KEY warroomsecret
+      add LIVEKIT_INTERNAL_URL "${LIVEKIT_INTERNAL_URL:-http://livekit:7880}"
+      add EGRESS_S3_ENDPOINT "${EGRESS_S3_ENDPOINT:-http://minio:9000}"
+      add EGRESS_S3_BUCKET "${EGRESS_S3_BUCKET:-recordings}"
+      add EGRESS_S3_ACCESS_KEY "${EGRESS_S3_ACCESS_KEY:-${MINIO_ROOT_USER:-warroom}}"
+      add EGRESS_S3_SECRET_KEY "${EGRESS_S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-warroomsecret}}"
       ;;
     scale)
       add REDIS_HOST redis
@@ -112,10 +135,6 @@ settings_for() {
       add FRONTEND_BIND 127.0.0.1
       ;;
     prod)
-      # The compose file's `:?` guards are gone with the overlays, so the
-      # refusal to deploy on the development password lives here instead.
-      : "${DB_PASSWORD:?prod requires DB_PASSWORD}"
-      : "${PUBLIC_ORIGIN:?prod requires PUBLIC_ORIGIN}"
       add RESTART_POLICY unless-stopped
       add ALLOWED_ORIGINS "$PUBLIC_ORIGIN"
       add FRONTEND_BIND 127.0.0.1
@@ -144,11 +163,79 @@ for arg in "$@"; do
   if [ "$arg" = "all" ]; then WANTED+=("${ALL[@]}"); else WANTED+=("$arg"); fi
 done
 
+PRODUCTION=0
+case " ${WANTED[*]-} " in *" prod "*) PRODUCTION=1;; esac
+
+has_feature() { case " ${WANTED[*]-} " in *" $1 "*) return 0;; *) return 1;; esac; }
+require_value() {
+  local key=$1 value=${!1-}
+  [ -n "$value" ] || { echo "prod requires $key" >&2; exit 1; }
+}
+reject_value() {
+  local key=$1 rejected=$2 value=${!1-}
+  [ "$value" != "$rejected" ] || { echo "prod refuses development value for $key" >&2; exit 1; }
+}
+
+# `prod` is a safety boundary, not a convenient restart-policy alias. Validate
+# every selected integration before applying defaults so a public deployment
+# cannot quietly inherit a fixture service or repository credential.
+if [ "$PRODUCTION" = "1" ]; then
+  has_feature tls && { echo "prod and tls are mutually exclusive edge modes" >&2; exit 1; }
+  require_value DB_PASSWORD
+  require_value PUBLIC_ORIGIN
+  reject_value DB_PASSWORD warroomlive
+  case "$PUBLIC_ORIGIN" in https://*) :;; *) echo "prod requires an https PUBLIC_ORIGIN" >&2; exit 1;; esac
+
+  if has_feature oidc; then
+    require_value OIDC_ISSUER
+    require_value OIDC_JWK_SET_URI
+    require_value OIDC_CLIENT_ID
+    case "$OIDC_JWK_SET_URI" in *devidp*) echo "prod refuses the bundled devidp" >&2; exit 1;; esac
+  fi
+  if has_feature ai; then
+    require_value AI_BASE_URL
+    case "$AI_BASE_URL" in *devai*) echo "prod refuses the bundled devai" >&2; exit 1;; esac
+  fi
+  if has_feature sfu || has_feature recording; then
+    require_value LIVEKIT_API_KEY
+    require_value LIVEKIT_API_SECRET
+    reject_value LIVEKIT_API_KEY devkey
+    reject_value LIVEKIT_API_SECRET devkey_secret_needs_at_least_32_bytes
+  fi
+  if has_feature turn; then
+    require_value TURN_USERNAME
+    require_value TURN_PASSWORD
+    reject_value TURN_USERNAME warroom
+    reject_value TURN_PASSWORD warroomsecret
+    case "${TURN_URLS:-turn:${TURN_PUBLIC_HOST:-localhost}:3478}" in
+      *localhost*|*127.0.0.1*|*0.0.0.0*|*\[::1\]*)
+        echo "prod requires a publicly reachable TURN_URLS or TURN_PUBLIC_HOST" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  if has_feature recording; then
+    require_value MINIO_ROOT_USER
+    require_value MINIO_ROOT_PASSWORD
+    reject_value MINIO_ROOT_USER warroom
+    reject_value MINIO_ROOT_PASSWORD warroomsecret
+  fi
+  if has_feature backup-s3; then
+    require_value RCLONE_CONFIG_S3_ENDPOINT
+    require_value RCLONE_CONFIG_S3_ACCESS_KEY_ID
+    require_value RCLONE_CONFIG_S3_SECRET_ACCESS_KEY
+    require_value BACKUP_PASSPHRASE
+    reject_value RCLONE_CONFIG_S3_ACCESS_KEY_ID warroom
+    reject_value RCLONE_CONFIG_S3_SECRET_ACCESS_KEY warroomsecret
+    reject_value BACKUP_PASSPHRASE warroom-dev-backup-passphrase
+  fi
+fi
+
 # Prerequisites, repeatedly — a chain could be deeper than one step.
 for _ in 1 2 3; do
   for f in ${WANTED[@]+"${WANTED[@]}"}; do
     case " ${FEATURES[*]} " in *" $f "*) :;; *) echo "unknown feature: $f" >&2; usage; exit 1;; esac
-    need=${NEEDS[$f]:-}
+    need=$(needs_for "$f")
     if [ -n "$need" ] && [[ " ${WANTED[*]} " != *" $need "* ]]; then
       echo "note: $f requires $need — adding it" >&2
       WANTED+=("$need")
@@ -163,14 +250,16 @@ PROFILE_ARGS=()
 for f in "${FEATURES[@]}"; do
   [[ " ${WANTED[*]-} " == *" $f "* ]] || continue
   SELECTED+=("$f")
-  [ -n "${PROFILE[$f]:-}" ] && PROFILE_ARGS+=(--profile "${PROFILE[$f]}")
+  for profile in $(profiles_for "$f"); do
+    PROFILE_ARGS+=(--profile "$profile")
+  done
   settings_for "$f"
 done
 
 # The Spring profile union — postgres first, since everything else assumes it.
 springs=(postgres)
 for f in ${SELECTED[@]+"${SELECTED[@]}"}; do
-  for p in ${SPRING[$f]:-}; do
+  for p in $(spring_for "$f"); do
     [[ " ${springs[*]} " == *" $p "* ]] || springs+=("$p")
   done
 done

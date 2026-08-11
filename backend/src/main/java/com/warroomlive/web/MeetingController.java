@@ -45,17 +45,21 @@ public class MeetingController {
 
     private final ObjectProvider<MeetingStore> meetings;
     private final ObjectProvider<MeetingExporter> exporter;
+    private final RoomAuthorization authorization;
 
     public MeetingController(ObjectProvider<MeetingStore> meetings,
-            ObjectProvider<MeetingExporter> exporter) {
+            ObjectProvider<MeetingExporter> exporter,
+            RoomAuthorization authorization) {
         this.meetings = meetings;
         this.exporter = exporter;
+        this.authorization = authorization;
     }
 
     @GetMapping("/{room}")
     public List<Map<String, Object>> list(@PathVariable String room,
             @RequestParam(defaultValue = "" + DEFAULT_LIMIT) int limit,
             @RequestParam(defaultValue = "0") int offset) {
+        authorization.requireRoomMember(room, "read meeting history");
         return store()
                 .forRoom(room, Pages.limit(limit, DEFAULT_LIMIT, MAX_LIMIT), Pages.offset(offset))
                 .stream().map(MeetingController::describe).toList();
@@ -70,6 +74,7 @@ public class MeetingController {
      */
     @GetMapping(value = "/{room}/{id}/export", produces = "text/markdown; charset=UTF-8")
     public ResponseEntity<String> export(@PathVariable String room, @PathVariable long id) {
+        authorization.requireRoomMember(room, "export meetings");
         MeetingEntity meeting = store().byId(room, id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "no such meeting"));
