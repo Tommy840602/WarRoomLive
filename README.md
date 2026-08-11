@@ -331,7 +331,7 @@ Signaling 訊息格式(前後端共用)定義於 `frontend/src/signaling/types.t
 ## 開發環境需求
 
 - Java 21、Maven 3.9+
-- Node 20+、npm 10+
+- Node 20.19+ 或 22.12+（不支援 21.x）、npm 10+
 
 ## 後端(backend/)
 
