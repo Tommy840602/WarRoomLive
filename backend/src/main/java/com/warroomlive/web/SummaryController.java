@@ -43,19 +43,23 @@ public class SummaryController {
     private final ObjectProvider<TranscriptStore> transcripts;
     private final ObjectProvider<SummaryStore> summaries;
     private final ObjectProvider<Summarizer> summarizer;
+    private final RoomAuthorization authorization;
 
     public SummaryController(ObjectProvider<MeetingStore> meetings,
             ObjectProvider<TranscriptStore> transcripts,
             ObjectProvider<SummaryStore> summaries,
-            ObjectProvider<Summarizer> summarizer) {
+            ObjectProvider<Summarizer> summarizer,
+            RoomAuthorization authorization) {
         this.meetings = meetings;
         this.transcripts = transcripts;
         this.summaries = summaries;
         this.summarizer = summarizer;
+        this.authorization = authorization;
     }
 
     @GetMapping("/{room}/{id}/summary")
     public Map<String, Object> get(@PathVariable String room, @PathVariable long id) {
+        authorization.requireRoomMember(room, "read meeting summaries");
         return describe(store().find(room, id).orElseThrow(() -> new ResponseStatusException(
                 HttpStatus.NOT_FOUND, "this meeting has no summary yet")));
     }
@@ -63,6 +67,7 @@ public class SummaryController {
     @PostMapping("/{room}/{id}/summary")
     public Map<String, Object> create(@PathVariable String room, @PathVariable long id,
             @RequestParam(defaultValue = "false") boolean regenerate) {
+        authorization.requireRoomMember(room, "create meeting summaries");
         SummaryStore store = store();
         if (!regenerate) {
             Optional<MeetingSummaryEntity> existing = store.find(room, id);

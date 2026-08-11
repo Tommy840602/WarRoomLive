@@ -78,6 +78,7 @@ public class TodoController {
     public List<Map<String, Object>> list(@PathVariable String room,
             @RequestParam(defaultValue = "" + DEFAULT_LIMIT) int limit,
             @RequestParam(defaultValue = "0") int offset) {
+        authorization.requireRoomMember(room, "list agenda items");
         return store()
                 .forRoom(room, Pages.limit(limit, DEFAULT_LIMIT, MAX_LIMIT), Pages.offset(offset))
                 .stream().map(TodoController::describe).toList();
@@ -85,6 +86,7 @@ public class TodoController {
 
     @PostMapping("/{room}")
     public Map<String, Object> create(@PathVariable String room, @RequestBody CreateRequest request) {
+        authorization.requireRoomMember(room, "create agenda items");
         String text = requireText(request.text());
         TodoEntity saved = store().create(room, text, trimToNull(request.assignee()),
                 parseInstant(request.dueAt(), "dueAt"), authorization.caller());
@@ -102,6 +104,7 @@ public class TodoController {
     @PatchMapping("/{room}/{id}")
     public Map<String, Object> update(@PathVariable String room, @PathVariable long id,
             @RequestBody UpdateRequest request) {
+        authorization.requireRoomMember(room, "update agenda items");
         String actor = authorization.caller();
         TodoEntity current = store().byId(room, id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "no such item"));

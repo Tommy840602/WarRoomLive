@@ -1,5 +1,5 @@
 // The event backbone end to end, for the events overlay:
-//   docker compose -f docker-compose.yml -f docker-compose.events.yml up -d
+//   ./stack.sh up events -d
 //   tests/e2e/run.sh events
 //
 // Drives real user activity, then follows it through outbox → Redpanda →

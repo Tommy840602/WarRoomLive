@@ -33,9 +33,11 @@ public class SearchController {
     private static final int MAX_QUERY_LENGTH = 200;
 
     private final JdbcTemplate jdbc;
+    private final RoomAuthorization authorization;
 
-    public SearchController(JdbcTemplate jdbc) {
+    public SearchController(JdbcTemplate jdbc, RoomAuthorization authorization) {
         this.jdbc = jdbc;
+        this.authorization = authorization;
     }
 
     /**
@@ -51,6 +53,13 @@ public class SearchController {
             @RequestParam(required = false) String room,
             @RequestParam(defaultValue = "" + DEFAULT_LIMIT) int limit,
             @RequestParam(defaultValue = "0") int offset) {
+        if (authorization.authenticated() && (room == null || room.isBlank())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "authenticated search must be scoped to a room");
+        }
+        if (room != null && !room.isBlank()) {
+            authorization.requireRoomMember(room, "search room messages");
+        }
         if (q.length() > MAX_QUERY_LENGTH) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "query must be at most " + MAX_QUERY_LENGTH + " characters");

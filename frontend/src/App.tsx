@@ -104,6 +104,11 @@ interface ChatEntry {
   name?: string;
 }
 
+interface RecordingControl {
+  egressId: string;
+  controlToken: string;
+}
+
 /** The side panels, one of which is open at a time. */
 type SidebarTab =
   | "members"
@@ -152,7 +157,7 @@ export default function App() {
    * message it received after the first.
    */
   const mediaModeRef = useRef<"mesh" | "sfu">("mesh");
-  const [recordingId, setRecordingId] = useState<string | null>(null);
+  const [recording, setRecording] = useState<RecordingControl | null>(null);
   const [roomState, setRoomState] = useState<RoomStateInfo>({
     host: "",
     locked: false,
@@ -235,7 +240,7 @@ export default function App() {
   // Mirror the flags so listeners registered once can read the latest values.
   const mediaStateRef = useRef<MediaState>({ audio: true, video: true });
   const handRaisedRef = useRef(false);
-  const recordingIdRef = useRef<string | null>(null);
+  const recordingRef = useRef<RecordingControl | null>(null);
   // Read at reconnect time rather than captured at join time: a silent renew may
   // have replaced the token since, and a stale one is refused at the handshake.
   const tokenRef = useRef(token);
@@ -296,15 +301,18 @@ export default function App() {
   /** Tears down the session and resets all room state (does not notify the server). */
   const teardown = useCallback(() => {
     // Leaving with a recording running: stop it best-effort.
-    if (recordingIdRef.current) {
+    if (recordingRef.current) {
+      const control = recordingRef.current;
       void fetch(
-        `/api/media/recordings/stop?egressId=${encodeURIComponent(recordingIdRef.current)}`,
+        "/api/media/recordings/stop",
         {
           method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(control),
         },
       );
-      recordingIdRef.current = null;
-      setRecordingId(null);
+      recordingRef.current = null;
+      setRecording(null);
     }
     clientRef.current?.close();
     cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -345,7 +353,7 @@ export default function App() {
     mediaStateRef.current = { audio: true, video: true };
     handRaisedRef.current = false;
     setStatus("idle");
-  }, []);
+  }, [authHeaders, applyMediaMode]);
 
   /**
    * Recovers the room after the signaling socket came back. The server dropped
@@ -1073,10 +1081,32 @@ export default function App() {
         stream,
         mediaEvents,
         room,
-        displayName,
       );
       roomRef.current = mediaRoom;
+      const joined = new Promise<void>((resolve, reject) => {
+        let cleanup = () => {};
+        const offPeers = client.on("peers", () => {
+          cleanup();
+          resolve();
+        });
+        const offFull = client.on("room-full", () => {
+          cleanup();
+          reject(new Error("房間已滿"));
+        });
+        const offLocked = client.on("room-locked", () => {
+          cleanup();
+          reject(new Error("房間已鎖定"));
+        });
+        cleanup = () => {
+          offPeers();
+          offFull();
+          offLocked();
+        };
+      });
       mediaRoom.join(room, displayName);
+      // Room-scoped REST APIs require the signaling membership. Waiting for the
+      // server's `peers` acknowledgement removes the old HTTP-vs-WS join race.
+      await joined;
       setStatus("in-room");
       void loadRecordings(room);
       void loadFiles(room);
@@ -1312,19 +1342,16 @@ export default function App() {
       stream: MediaStream,
       events: WebRtcRoomEvents,
       roomName: string,
-      displayName: string,
     ): Promise<MediaRoom> => {
       const config = mediaConfigRef.current;
       if (mode === "sfu") {
-        const lkToken = await fetchMediaToken(
-          roomName,
-          selfIdRef.current,
-          displayName,
-          token,
-        );
         return new SfuRoom(client, selfIdRef.current, stream, events, {
           url: resolveLivekitUrl(config?.livekitUrl ?? ""),
-          token: lkToken,
+          token: () => fetchMediaToken(
+            roomName,
+            selfIdRef.current,
+            tokenRef.current,
+          ),
         });
       }
       return new WebRtcRoom(
@@ -1335,7 +1362,7 @@ export default function App() {
         config?.iceServers?.length ? config.iceServers : undefined,
       );
     },
-    [token],
+    [],
   );
 
   /**
@@ -1374,7 +1401,6 @@ export default function App() {
           stream,
           events,
           joined.room,
-          joined.displayName,
         );
         roomRef.current = next;
         next.join(joined.room, joined.displayName);
@@ -1465,16 +1491,17 @@ export default function App() {
   const toggleRecording = useCallback(async () => {
     const headers = authHeaders();
     try {
-      if (recordingId) {
+      if (recording) {
         await fetch(
-          `/api/media/recordings/stop?egressId=${encodeURIComponent(recordingId)}`,
+          "/api/media/recordings/stop",
           {
             method: "POST",
-            headers,
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify(recording),
           },
         );
-        recordingIdRef.current = null;
-        setRecordingId(null);
+        recordingRef.current = null;
+        setRecording(null);
         // Egress uploads after the stop call, so give it a moment to land.
         setTimeout(() => void loadRecordings(room), 4000);
         return;
@@ -1487,13 +1514,13 @@ export default function App() {
         },
       );
       if (!res.ok) throw new Error(`錄影啟動失敗(HTTP ${res.status})`);
-      const { egressId } = (await res.json()) as { egressId: string };
-      recordingIdRef.current = egressId;
-      setRecordingId(egressId);
+      const control = (await res.json()) as RecordingControl;
+      recordingRef.current = control;
+      setRecording(control);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [recordingId, room, token, loadRecordings]);
+  }, [recording, room, token, loadRecordings]);
 
   const sendChat = useCallback(
     (text: string) => {
@@ -1568,7 +1595,7 @@ export default function App() {
                 className="btn-secondary"
                 onClick={() => void toggleRecording()}
               >
-                {recordingId ? "🔴 停止錄影" : "錄影"}
+                {recording ? "🔴 停止錄影" : "錄影"}
               </button>
             )}
             {/* Offered only where it could work. Speech recognition is a
@@ -1871,7 +1898,7 @@ export default function App() {
               aria-labelledby="tab-search"
               hidden={sidebarTab !== "search"}
             >
-              <SearchPanel onSearch={searchMessages} />
+              <SearchPanel onSearch={searchMessages} allowGlobal={!token} />
             </div>
           )}
           {status === "in-room" && fileSharingAvailable && (

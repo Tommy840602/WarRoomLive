@@ -278,7 +278,7 @@ const extensions = [httpEndpoints, guards, updateLog]
 
 // Multi-instance mode: with REDIS_HOST set, Hocuspocus instances sync document
 // updates and awareness through Redis, so replicas can serve the same documents
-// (see docker-compose.scale.yml). With REDIS_SENTINEL_NODES set (ha overlay),
+// (see the `scale` feature). With REDIS_SENTINEL_NODES set (the `ha` feature),
 // the connection goes through Sentinel and follows master failovers. Unset in
 // local dev → single instance, no Redis.
 if (process.env.REDIS_SENTINEL_NODES) {

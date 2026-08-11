@@ -1,115 +1,241 @@
 #!/usr/bin/env bash
-# Bring the stack up with any combination of the optional overlays.
+# Bring WarRoomLive up with any combination of its optional features.
 #
-#   ./stack.sh up oidc ai events                  # three features at once
-#   ./stack.sh up recording observability         # recording pulls in sfu
-#   ./stack.sh up all                             # everything that can coexist
-#   ./stack.sh config oidc ai                     # print the merged config
-#   ./stack.sh down oidc ai                       # same set, torn down
-#   ./stack.sh files oidc ai                      # just the -f flags, to reuse
+#   ./stack.sh up                          # base only
+#   ./stack.sh up oidc ai events           # three features
+#   ./stack.sh up recording observability  # recording pulls in sfu
+#   ./stack.sh up all
+#   ./stack.sh up oidc -d --build          # anything dash-led goes to compose
+#   ./stack.sh env oidc ai                 # just show what those features set
+#   ./stack.sh down / ps / logs / config …
 #
-# WHY THIS EXISTS. Stacking `-f` by hand is not merely tedious, it is
-# error-prone in one specific and dangerous way: a scalar environment value is
-# REPLACED by a later file rather than merged, and several overlays each set
-# SPRING_PROFILES_ACTIVE. `-f oidc -f ai` used to produce `postgres,ai` — the
-# backend fell back to its permit-all chain while devidp still ran and the
-# frontend still showed a login screen. A stack that looks authenticated and is
-# not is the worst failure this repo can produce, and no test caught it because
-# every suite ran one overlay at a time.
+# There is one docker-compose.yml and no overlays. Optional SERVICES are gated
+# by compose profiles; optional SETTINGS on the shared services cannot be —
+# compose has no per-key conditional — so the compose file always declares them
+# with "off" defaults and this script supplies the on-values.
 #
-# So the overlays now all read $WARROOM_PROFILES, and this computes the union.
+# That pairing is the reason this file exists. An OIDC issuer without the `oidc`
+# Spring profile is a stack that renders a login screen in front of a
+# permit-all backend; the two must never be settable apart. Here they are one
+# table entry.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# --- The catalogue: feature -> compose file, required Spring profiles, and the
-#     features it cannot work without. Order in ORDER is the order the -f flags
-#     are passed, which decides who wins where two overlays set the same key.
-declare -A FILE=(
-  [oidc]=docker-compose.oidc.yml
-  [ai]=docker-compose.ai.yml
-  [events]=docker-compose.events.yml
-  [observability]=docker-compose.observability.yml
-  [turn]=docker-compose.turn.yml
-  [sfu]=docker-compose.sfu.yml
-  [recording]=docker-compose.recording.yml
-  [scale]=docker-compose.scale.yml
-  [ha]=docker-compose.ha.yml
-  [backup]=docker-compose.backup.yml
-  [backup-s3]=docker-compose.backup-s3.yml
-  [tls]=docker-compose.tls.yml
-)
+FEATURES=(oidc ai events observability turn sfu recording scale ha backup backup-s3 tls prod)
 
-declare -A PROFILES=(
-  [oidc]=oidc
-  [ai]=ai
-  [events]=kafka
-  [scale]=redis
-  [ha]="redis redisha"
-)
+# Keep these lookups as case statements rather than associative arrays. macOS
+# still ships Bash 3.2, which supports indexed arrays but not `declare -A`.
+profiles_for() {
+  case "$1" in
+    oidc) [ "$PRODUCTION" = "1" ] || echo oidc-dev ;;
+    ai) [ "$PRODUCTION" = "1" ] || echo ai-dev ;;
+    events|observability|turn|sfu|recording|scale|ha|tls) echo "$1" ;;
+    backup-s3)
+      echo backup-s3
+      [ "$PRODUCTION" = "1" ] || echo backup-s3-dev
+      ;;
+  esac
+  return 0
+}
 
-declare -A NEEDS=(
-  [recording]=sfu
-  [ha]=scale
-  [backup-s3]=backup
-)
+spring_for() {
+  case "$1" in
+    oidc) echo oidc ;;
+    ai) echo ai ;;
+    events) echo kafka ;;
+    scale) echo redis ;;
+    ha) echo "redis redisha" ;;
+  esac
+  return 0
+}
 
-# Later files override earlier ones on any key they share, so this order is a
-# statement about intent: recording refines sfu's LiveKit, ha refines scale's
-# Redis, backup-s3 refines backup's volume, and tls takes the edge last because
-# it clears the frontend's published ports.
-ORDER=(oidc ai events observability turn sfu recording scale ha backup backup-s3 tls)
-
-# Everything except tls, which republishes the edge on different ports, and
-# turn, which wants host networking on a machine with a real address. `all` is
-# for "does this combination even come up", not for a deployment.
-ALL=(oidc ai events observability sfu recording scale ha backup)
+needs_for() {
+  case "$1" in
+    recording) echo sfu ;;
+    ha) echo scale ;;
+    backup-s3) echo backup ;;
+  esac
+  return 0
+}
 
 usage() {
   cat <<USAGE
-usage: ./stack.sh <command> [feature ...]
+usage: ./stack.sh <command> [feature ...] [docker compose args]
 
-commands
-  up | down | config | ps | logs | files    (anything else is passed to compose)
+features   ${FEATURES[*]}
+           all = the development stack (excludes tls, prod and turn).
 
-  Arguments after `--` go straight to docker compose:
-    ./stack.sh up oidc ai -- -d --build
-    ./stack.sh config oidc -- -q
+           recording implies sfu; ha implies scale; backup-s3 implies backup.
 
-features
-  ${ORDER[*]}
-  all        = ${ALL[*]}
-
-notes
-  recording implies sfu; ha implies scale; backup-s3 implies backup.
-  Spring profiles are unioned into \$WARROOM_PROFILES automatically.
+oidc and ai use bundled development stand-ins unless prod is selected.
+With prod, real provider settings and every selected feature's secrets are
+required; the launcher never starts devidp, devai or the backup MinIO fixture.
 USAGE
 }
+
+# What each feature switches on, beyond starting its services. One place, so a
+# feature's profile and its settings cannot drift apart.
+settings_for() {
+  case "$1" in
+    oidc)
+      add OIDC_ISSUER "${OIDC_ISSUER:-${PUBLIC_ORIGIN:-http://localhost:8088}/auth}"
+      add OIDC_JWK_SET_URI "${OIDC_JWK_SET_URI:-http://devidp:8089/auth/jwks}"
+      add OIDC_CLIENT_ID "${OIDC_CLIENT_ID:-warroomlive-web}"
+      ;;
+    ai)
+      # Points at the bundled dev stand-in unless the caller named a real one.
+      add AI_BASE_URL "${AI_BASE_URL:-http://devai:8090/v1}"
+      add AI_MODEL "${AI_MODEL:-devai-phrasebook}"
+      ;;
+    events)
+      add KAFKA_BOOTSTRAP_SERVERS redpanda:9092
+      add EVENTS_ENABLED true
+      ;;
+    observability)
+      add TRACING_ENABLED true
+      ;;
+    turn)
+      add TURN_URLS "${TURN_URLS:-turn:${TURN_PUBLIC_HOST:-localhost}:3478}"
+      add TURN_USERNAME "${TURN_USERNAME:-warroom}"
+      add TURN_PASSWORD "${TURN_PASSWORD:-warroomsecret}"
+      ;;
+    sfu)
+      # Path-style: the browser resolves it against the page origin and nginx
+      # proxies /livekit, keeping the single-origin setup.
+      add LIVEKIT_URL "${LIVEKIT_URL:-/livekit}"
+      add LIVEKIT_API_KEY "${LIVEKIT_API_KEY:-devkey}"
+      add LIVEKIT_API_SECRET "${LIVEKIT_API_SECRET:-devkey_secret_needs_at_least_32_bytes}"
+      # Media no longer costs upload per peer, so the signaling cap can rise.
+      # MESH_MAX_PEERS stays 8: rooms still start on the mesh and switch above it.
+      add MAX_ROOM_SIZE 50
+      ;;
+    recording)
+      add LIVEKIT_CONFIG livekit-recording.yaml
+      add LIVEKIT_INTERNAL_URL "${LIVEKIT_INTERNAL_URL:-http://livekit:7880}"
+      add EGRESS_S3_ENDPOINT "${EGRESS_S3_ENDPOINT:-http://minio:9000}"
+      add EGRESS_S3_BUCKET "${EGRESS_S3_BUCKET:-recordings}"
+      add EGRESS_S3_ACCESS_KEY "${EGRESS_S3_ACCESS_KEY:-${MINIO_ROOT_USER:-warroom}}"
+      add EGRESS_S3_SECRET_KEY "${EGRESS_S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-warroomsecret}}"
+      ;;
+    scale)
+      add REDIS_HOST redis
+      add BACKEND_REPLICAS 2
+      add COLLAB_REPLICAS 2
+      ;;
+    ha)
+      add REDIS_SENTINEL_NODES sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
+      add REDIS_SENTINEL_MASTER warroom
+      ;;
+    backup)
+      add PG_ARCHIVE_MODE on
+      ;;
+    tls)
+      # The port cannot be un-published, so it is bound to loopback: Caddy can
+      # reach it and the internet cannot.
+      add FRONTEND_BIND 127.0.0.1
+      ;;
+    prod)
+      add RESTART_POLICY unless-stopped
+      add ALLOWED_ORIGINS "$PUBLIC_ORIGIN"
+      add FRONTEND_BIND 127.0.0.1
+      add EDGE_REALIP_CONF real-ip.conf
+      ;;
+  esac
+}
+
+ENV_LINES=()
+add() { ENV_LINES+=("$1=$2"); export "$1=$2"; }
 
 [ $# -ge 1 ] || { usage; exit 1; }
 CMD=$1; shift
 
-# Features up to `--`, anything after it goes through to compose untouched.
-# Without the separator there is no way to tell `./stack.sh config oidc` ("the
-# oidc feature") from a service named oidc, and compose flags had nowhere to go.
+ALL=(oidc ai events observability sfu recording scale ha backup)
 WANTED=()
 PASSTHRU=()
-seen_sep=0
+sep=0
 for arg in "$@"; do
-  if [ "$arg" = "--" ]; then seen_sep=1; continue; fi
-  if [ "$seen_sep" = "1" ]; then PASSTHRU+=("$arg"); continue; fi
+  if [ "$arg" = "--" ]; then sep=1; continue; fi
+  # A leading dash can only be a compose argument — no feature is named `-d`.
+  # Accepting it without the separator means `./stack.sh up ai --build` works,
+  # rather than failing with "unknown feature: --build".
+  case "$arg" in -*) sep=1;; esac
+  if [ "$sep" = "1" ]; then PASSTHRU+=("$arg"); continue; fi
   if [ "$arg" = "all" ]; then WANTED+=("${ALL[@]}"); else WANTED+=("$arg"); fi
 done
 
-# Pull in prerequisites, repeatedly — backup-s3 needs backup, which needs
-# nothing, but a future chain could be deeper.
-# `${arr[@]:-}` on an EMPTY array yields one empty-string element, which then
-# indexes the associative arrays as [""] — "bad array subscript" under `set -u`,
-# which is how the plainest invocation of all (no features at all) died.
-# `${arr[@]+"${arr[@]}"}` expands to nothing instead.
+PRODUCTION=0
+case " ${WANTED[*]-} " in *" prod "*) PRODUCTION=1;; esac
+
+has_feature() { case " ${WANTED[*]-} " in *" $1 "*) return 0;; *) return 1;; esac; }
+require_value() {
+  local key=$1 value=${!1-}
+  [ -n "$value" ] || { echo "prod requires $key" >&2; exit 1; }
+}
+reject_value() {
+  local key=$1 rejected=$2 value=${!1-}
+  [ "$value" != "$rejected" ] || { echo "prod refuses development value for $key" >&2; exit 1; }
+}
+
+# `prod` is a safety boundary, not a convenient restart-policy alias. Validate
+# every selected integration before applying defaults so a public deployment
+# cannot quietly inherit a fixture service or repository credential.
+if [ "$PRODUCTION" = "1" ]; then
+  has_feature tls && { echo "prod and tls are mutually exclusive edge modes" >&2; exit 1; }
+  require_value DB_PASSWORD
+  require_value PUBLIC_ORIGIN
+  reject_value DB_PASSWORD warroomlive
+  case "$PUBLIC_ORIGIN" in https://*) :;; *) echo "prod requires an https PUBLIC_ORIGIN" >&2; exit 1;; esac
+
+  if has_feature oidc; then
+    require_value OIDC_ISSUER
+    require_value OIDC_JWK_SET_URI
+    require_value OIDC_CLIENT_ID
+    case "$OIDC_JWK_SET_URI" in *devidp*) echo "prod refuses the bundled devidp" >&2; exit 1;; esac
+  fi
+  if has_feature ai; then
+    require_value AI_BASE_URL
+    case "$AI_BASE_URL" in *devai*) echo "prod refuses the bundled devai" >&2; exit 1;; esac
+  fi
+  if has_feature sfu || has_feature recording; then
+    require_value LIVEKIT_API_KEY
+    require_value LIVEKIT_API_SECRET
+    reject_value LIVEKIT_API_KEY devkey
+    reject_value LIVEKIT_API_SECRET devkey_secret_needs_at_least_32_bytes
+  fi
+  if has_feature turn; then
+    require_value TURN_USERNAME
+    require_value TURN_PASSWORD
+    reject_value TURN_USERNAME warroom
+    reject_value TURN_PASSWORD warroomsecret
+    case "${TURN_URLS:-turn:${TURN_PUBLIC_HOST:-localhost}:3478}" in
+      *localhost*|*127.0.0.1*|*0.0.0.0*|*\[::1\]*)
+        echo "prod requires a publicly reachable TURN_URLS or TURN_PUBLIC_HOST" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  if has_feature recording; then
+    require_value MINIO_ROOT_USER
+    require_value MINIO_ROOT_PASSWORD
+    reject_value MINIO_ROOT_USER warroom
+    reject_value MINIO_ROOT_PASSWORD warroomsecret
+  fi
+  if has_feature backup-s3; then
+    require_value RCLONE_CONFIG_S3_ENDPOINT
+    require_value RCLONE_CONFIG_S3_ACCESS_KEY_ID
+    require_value RCLONE_CONFIG_S3_SECRET_ACCESS_KEY
+    require_value BACKUP_PASSPHRASE
+    reject_value RCLONE_CONFIG_S3_ACCESS_KEY_ID warroom
+    reject_value RCLONE_CONFIG_S3_SECRET_ACCESS_KEY warroomsecret
+    reject_value BACKUP_PASSPHRASE warroom-dev-backup-passphrase
+  fi
+fi
+
+# Prerequisites, repeatedly — a chain could be deeper than one step.
 for _ in 1 2 3; do
   for f in ${WANTED[@]+"${WANTED[@]}"}; do
-    [ -n "${FILE[$f]+x}" ] || { echo "unknown feature: $f" >&2; usage; exit 1; }
-    need=${NEEDS[$f]:-}
+    case " ${FEATURES[*]} " in *" $f "*) :;; *) echo "unknown feature: $f" >&2; usage; exit 1;; esac
+    need=$(needs_for "$f")
     if [ -n "$need" ] && [[ " ${WANTED[*]} " != *" $need "* ]]; then
       echo "note: $f requires $need — adding it" >&2
       WANTED+=("$need")
@@ -117,52 +243,46 @@ for _ in 1 2 3; do
   done
 done
 
-FILES=(-f docker-compose.yml)
+# Applied in FEATURES order, so what a stack ends up with never depends on the
+# order the features happened to be typed.
 SELECTED=()
-for f in "${ORDER[@]}"; do
-  if [[ " ${WANTED[*]-} " == *" $f "* ]]; then
-    FILES+=(-f "${FILE[$f]}")
-    SELECTED+=("$f")
-  fi
+PROFILE_ARGS=()
+for f in "${FEATURES[@]}"; do
+  [[ " ${WANTED[*]-} " == *" $f "* ]] || continue
+  SELECTED+=("$f")
+  for profile in $(profiles_for "$f"); do
+    PROFILE_ARGS+=(--profile "$profile")
+  done
+  settings_for "$f"
 done
 
-# The union, deduplicated, postgres first because every other profile assumes it.
-profiles=(postgres)
+# The Spring profile union — postgres first, since everything else assumes it.
+springs=(postgres)
 for f in ${SELECTED[@]+"${SELECTED[@]}"}; do
-  for p in ${PROFILES[$f]:-}; do
-    [[ " ${profiles[*]} " == *" $p "* ]] || profiles+=("$p")
+  for p in $(spring_for "$f"); do
+    [[ " ${springs[*]} " == *" $p "* ]] || springs+=("$p")
   done
 done
+WARROOM_PROFILES=$(IFS=,; echo "${springs[*]}")
 export WARROOM_PROFILES
-WARROOM_PROFILES=$(IFS=,; echo "${profiles[*]}")
+ENV_LINES+=("WARROOM_PROFILES=$WARROOM_PROFILES")
 
-# On stderr, so `files` stays pipeable while still telling you what it decided.
 echo "features: ${SELECTED[*]-}" >&2
 echo "profiles: $WARROOM_PROFILES" >&2
 
-if [ "$CMD" = "files" ]; then
-  echo "${FILES[@]}"
+if [ "$CMD" = "env" ]; then
+  printf '%s\n' ${ENV_LINES[@]+"${ENV_LINES[@]}"} | sort
   exit 0
 fi
 
-# Record what this stack IS, for anything that later needs to talk to it.
-#
-# The e2e suites shell out to `docker compose` themselves — to restart a
-# service, to exec psql, to run a one-off sweeper — and they used to build that
-# command from the base file plus overlays they named in their own source. On a
-# combined stack that is a DIFFERENT and narrower view of the same project, and
-# `docker compose run` reconciles services to the config it was given: the
-# sweeper in the retention suite quietly recreated collab without the events
-# overlay's environment, and document.snapshot.created stopped being emitted for
-# the rest of the session. Nothing logged anything; the events suite simply
-# started timing out.
+# Recorded so the e2e suites can talk to the stack that is actually running
+# rather than guessing which features are on.
 if [ "$CMD" = "up" ]; then
   {
-    echo "WARROOM_COMPOSE_FILES='${FILES[*]}'"
-    echo "WARROOM_PROFILES='$WARROOM_PROFILES'"
+    printf "WARROOM_FEATURES='%s'\n" "${SELECTED[*]-}"
+    printf "WARROOM_PROFILE_ARGS='%s'\n" "${PROFILE_ARGS[*]-}"
+    printf '%s\n' ${ENV_LINES[@]+"${ENV_LINES[@]}"}
   } > .stack.env
 fi
 
-# `"${PASSTHRU[@]:-}"` would expand an EMPTY array to one empty-string argument,
-# which compose reads as a service named "" and rejects. This expands to nothing.
-exec docker compose "${FILES[@]}" "$CMD" ${PASSTHRU[@]+"${PASSTHRU[@]}"}
+exec docker compose ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} "$CMD" ${PASSTHRU[@]+"${PASSTHRU[@]}"}

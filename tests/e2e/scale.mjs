@@ -1,6 +1,6 @@
 // Multi-node behaviour, for the scale overlay. DESTRUCTIVE: SIGKILLs one
 // backend replica to prove the survivors clean up after it.
-//   docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d
+//   ./stack.sh up scale -d
 //   tests/e2e/run.sh scale
 //
 // Covers CRDT convergence across collab replicas, and ghost pruning: a node

@@ -2,7 +2,7 @@
 # LiveKit RTC load test against the SFU overlay: simulated publishers and
 # subscribers exercise the media path (the k6 suite only covers signaling).
 #
-#   docker compose -f docker-compose.yml -f docker-compose.sfu.yml up -d
+#   ./stack.sh up sfu -d
 #   tests/load/rtc-load.sh [video-publishers] [subscribers] [duration]
 #
 # Defaults model one busy war room: 5 publishers + 20 subscribers for 60s.

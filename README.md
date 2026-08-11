@@ -28,7 +28,7 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
 - **螢幕分享**:以 `getDisplayMedia` 取得螢幕 track,透過 `RTCRtpSender.replaceTrack` 換掉每個 peer 的視訊 track,**不需重新協商**;停止時(或按瀏覽器內建的停止分享)自動換回攝影機。分享期間加入的新成員也會收到螢幕畫面。
 - **靜音 / 關視訊**:本地切換 track 的 `enabled`,並透過 `state` 訊息把音視訊開關廣播給房間;其他成員的視訊標籤與成員名單會顯示對應圖示(🔇 / 📷)。新成員加入時,既有成員會重送一次自己的狀態,確保畫面同步。
 - **表情反應 / 舉手**:`reaction` 訊息廣播即時 emoji(👍 ❤️ 😂 🎉 👏),畫面上浮出淡出動畫;`hand` 訊息廣播舉手開關(✋),在視訊標籤與成員名單持續顯示。舉手狀態同樣會在新成員加入時重送。
-- **房間人數上限**:因 mesh 上行頻寬隨人數上升,後端對每間房設硬性上限(`warroomlive.signaling.max-room-size`,預設 8),額滿時以 `room-full` 拒絕加入;前端接近上限(6 人)顯示柔性警告橫幅(僅 mesh 模式)。需要更大房間時改用 SFU 疊加層(見下方)。
+- **房間人數上限**:因 mesh 上行頻寬隨人數上升,後端對每間房設硬性上限(`warroomlive.signaling.max-room-size`,預設 8),額滿時以 `room-full` 拒絕加入;前端接近上限(6 人)顯示柔性警告橫幅(僅 mesh 模式)。需要更大房間時改用 `SFU` 功能(見下方)。
 - **身分由伺服器決定,不是客戶端自報**:開了 `oidc` 之後,WebSocket 握手就把 JWT 的 subject 與 IdP 認可的顯示名稱記在連線上;`join` 時**以 IdP 的名稱覆蓋客戶端送來的**。顯示名稱是房間裡所有人用來判斷「我在跟誰講話」的東西,如果登入的使用者還能自己取任意名字,那登入就只證明了「有權限進來」,對身分毫無意義。subject 跟著進 backplane 的成員目錄,所以連線之外(例如一個 HTTP 請求)也能對「這是誰」做判斷——刪除錄影與刪除檔案因此可以**限房間主持人**。沒有 IdP 時沒有 subject,一切照舊,零依賴預設不受影響。subject 不會放進 `PeerInfo`:房間需要看到名字,不需要看到別人的帳號識別碼。
 - **濫用防護(三個平面對稱)**:信令平面有每連線 token bucket(預設 60/s,允許 2 倍突發,所以「加入房間 + 一連串 ICE candidate」不會被誤擋)、容器層的訊框上限(64 KB)、以及聊天長度上限(4000 字,**在寫入資料庫之前**檢查);CRDT 平面本來就有訊息速率/單筆更新/文件大小三重上限;HTTP API 用同一個 token bucket 以來源位址計(預設 20/s + 2 倍突發)。處置方式依意圖不同:信令超速**丟棄該訊息**(突發多半是程式錯誤或網路問題,斷線會連帶讓聊天、presence、協商一起死)、過長聊天**明確回錯**(絕不截斷——發送者必須知道沒送出去)、超大訊框由容器直接以 1009 關閉、HTTP 超量回 **429 + Retry-After**(呼叫端在等答案,可以被告知退讓)。每種拒絕都有指標(`warroomlive.signaling.messages.in`、`warroomlive.api.rejected`)。
   HTTP 這道**跑在認證之前**——洪水應該在讓伺服器驗簽章、抓 IdP 的 JWKS 之前就被擋掉。來源位址取 `X-Forwarded-For` 的**最後一段**(nginx 附加在後面的那段);前面的是客戶端自己塞的、可以偽造,取第一段等於讓任何人每次請求都換一個新額度。健康檢查、`/api/auth/config`、自我認證的 LiveKit webhook 豁免。
@@ -49,7 +49,7 @@ frontend (React + Vite, :5173)                 backend (Spring Boot, :8080)
 - **會議紀錄與匯出**:側邊的「紀錄」面板列出這個房間開過的每一場會議——什麼時候、多久、最多幾個人。**這些列從會議領域上線那天就一直在寫,而在此之前沒有任何地方讀得到它**,房間答不出關於自己的「上次我們開了多久」。每一列可以把整場會議匯出成一份 Markdown:聊天、議程、共同筆記、共享檔案、錄影。散會之後,一個戰情室原本什麼都不留,只留下五個沒有人會一起打開的地方。
 - **匯出對自己能做什麼是誠實的**:聊天、檔案、錄影帶著自己的時間,所以會**框到那場會議**;議程不會——一件在這場會議提出、下場會議關掉的事屬於兩場,所以匯出的是房間目前的議程,並且**標明是目前狀態**。共同筆記是一個房間一份 Yjs 文件、不是一場會議一份,所以同樣是目前內容而不是當時快照,文件裡直說,而不是暗示一個它拿不出來的東西。筆記由 collab 服務提供(只有它有 Yjs 可以解那串 update),那個端點是內部的、nginx 不代理;讀不到就寫一行說讀不到,而不是安靜地少一段。
 - **到期會通知**:期限到了,伺服器會告訴房間一次——**剛好一次**。只在你打開面板時才存在的期限,不是工具在幫你記的期限。`reminded_at` 與廣播在同一個交易裡提交:靠記憶體記住說過什麼的排程器,重啟後會全部重講,兩個節點則會各講一次。
-- **訊息搜尋**:側邊可以搜尋聊天記錄(預設只搜這個房間,可切換成全部),結果分頁。資料來自 indexer 的讀模型,所以需要 events 疊加層在跑;沒啟用時會明說「沒有啟用訊息搜尋」,而不是回一個空結果——「沒有符合」跟「沒有索引」是兩件事。
+- **訊息搜尋**:側邊可以搜尋聊天記錄(預設只搜這個房間,可切換成全部),結果分頁。資料來自 indexer 的讀模型,所以需要 `events` 功能在跑;沒啟用時會明說「沒有啟用訊息搜尋」,而不是回一個空結果——「沒有符合」跟「沒有索引」是兩件事。
 - **@ 標註**:打 `@` 就會列出房間裡的人,方向鍵選、Enter 或 Tab 帶入、Esc 收起來。空的 `@` 列出全部——那是讓人**發現**這個功能的方式,而不是一個你得先知道才用得到的語法。**但欄位仍然是自由文字**:一件事可以屬於一個從來沒開過這個 app 的人,所以列表裡沒有的名字照樣收。`alice@example` 是地址不是標註。
 - **時間區間會把行事曆那段填滿**:`與法務對齊 @bob 明天14:00-15:00` 建立一個佔用 14:00 到 15:00 的約會,格線上就是那麼高的一塊。**送出前的預覽會直接顯示那段區間**——「1 天後」講不出來的是「星期四下午會被吃掉多少」。這條線上原本有個缺陷:有時間區間就會變成行事曆項目,而行事曆項目沒有負責人欄位,所以 `@bob` 在預覽裡看得到、送出去就不見了。
 - **一行輸入**:議程只有一個輸入框,整句寫進去就好——`寄簡報 @bob 明天15:00`、`對外說明稿定稿 週三14:00`、`與法務對齊 明天14:00-15:00`。負責人、日期、時間由前端從那一行解析出來(今天/明天/後天、週X/禮拜X/星期X、`HH:MM` 與 `HH點`、`M/D`、`N天後`/`N小時後`、以及**時段** `14:00-15:00`——**有結束時間就是約會,沒有就是待辦**,而送出前的預覽會直說是哪一種,所以一行輸入不會偷偷替你決定這是一場會議);**認不出來的字一律留在文字裡**,不會被吃掉。送出前把「解讀為」顯示回去,所以解析永遠不是事後才發現的猜測。會議進行中沒有人會 tab 過四個欄位,而那正是這份清單該被填的時刻。約會顯示時鐘時間(那是你要到場的時刻),待辦顯示還有多久(沒有人「到場」參加一個期限,他們只想知道那是不是今天的事);在清單檢視裡,不是今天的約會會帶上日期——單獨一個「16:37」是個沒辦法回答的問題。絕對時間放在 tooltip。
@@ -74,43 +74,46 @@ docker compose up --build
 
 > 前端使用相對路徑與 `window.location.host` 組出 WebSocket URL,因此不論部署在哪個網域/埠都不需改設定。
 
-## 把疊加層混在一起
+## 一個檔案,所有功能
 
-每個疊加層都可以單獨用,也可以疊起來。`stack.sh` 負責記住怎麼疊:
+只有一份 `docker-compose.yml`,沒有功能。功能用開關決定:
 
 ```bash
-./stack.sh up oidc ai events              # 三個功能一起
-./stack.sh up recording observability     # recording 會自動帶上 sfu
-./stack.sh up all                         # 所有能共存的
-./stack.sh up oidc ai -- -d --build       # `--` 之後原樣傳給 docker compose
+./stack.sh up                          # 基礎:db + backend + collab + frontend
+./stack.sh up oidc ai events           # 三個功能
+./stack.sh up recording observability  # recording 會自動帶上 sfu
+./stack.sh up all
+./stack.sh env oidc ai                 # 只看這組功能會設定什麼
 ```
 
-它做三件事:補上前置疊加層(recording→sfu、ha→scale、backup-s3→backup)、決定 `-f` 的順序(後面的檔案在同一個 key 上會蓋掉前面的,所以順序是**意圖**),以及算出 Spring profile 的**聯集**。
+**選用的「服務」**用 compose `profiles:` 開關;**選用的「設定」**沒辦法這樣做 —— compose 沒有針對單一 key 的條件式 —— 所以它們一律以「關閉」的預設值寫在檔案裡,由 `stack.sh` 提供打開時的值。
 
-最後那件事是它存在的原因。**scalar 的環境變數會被後面的 `-f` 取代,而不是合併** —— 而有六個疊加層各自設 `SPRING_PROFILES_ACTIVE`。`-f oidc -f ai` 留下的是 `postgres,ai`:後端退回 permit-all 的安全鏈,而 devidp 照常在跑、前端照常顯示登入畫面。**一個看起來有驗證、實際上完全開放的房間**,是這個系統能產生的最糟糕的失敗。每一支測試都過,因為每一支都只跑一個疊加層。
+那個配對就是 `stack.sh` 存在的理由。**有 OIDC issuer 卻沒有 `oidc` 這個 Spring profile,等於在一個 permit-all 的後端前面擺一個登入畫面** —— 兩者必須永遠一起設定,所以它們是同一張表裡的同一筆。
 
-`tests/compose/run.sh` 現在專門檢查組合出來的結果(只用 `docker compose config`,不需要 image、網路或資料庫),而且是唯一能在 CI 跑的 stack 級測試。
+改這個檔案時有一條規則要知道:**always-on 的服務不能 `depends_on` 有 profile 的服務**。那個 profile 沒啟用時,compose 會用 "depends on undefined service" 讓整份設定失效。所以 frontend 不依賴 devidp/livekit、backend 不依賴 redpanda/redis —— nginx 的每個 upstream 都是請求時才解析,而 Redis 與 broker 的 client 本來就把「還沒起來」當成暫時狀態。
 
-## SFU 模式(選用疊加層):超過 8 人自動切換
+`tests/compose/run.sh` 檢查各種功能組合解析出來的結果(只用 `docker compose config`,不需要 image、網路或資料庫),是唯一能在 CI 跑的 stack 級測試。
 
-預設媒體走瀏覽器間 full mesh。掛上 SFU 疊加層後,**房間超過 8 人就自動改走 LiveKit**:每人只上傳一份,由 SFU 扇出,上行頻寬不再隨人數增長。
+## SFU 模式(選用功能):超過 8 人自動切換
+
+預設媒體走瀏覽器間 full mesh。掛上 `SFU` 功能後,**房間超過 8 人就自動改走 LiveKit**:每人只上傳一份,由 SFU 扇出,上行頻寬不再隨人數增長。
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.sfu.yml up --build
+./stack.sh up sfu --build
 ```
 
 - **傳輸方式是「房間」的屬性,不是「部署」的屬性**。有 SFU 不代表四個人也要繞過去——人少的時候直連就是延遲最低的路徑,SFU 那一跳要等到房間長到 mesh 撐不住才划算(每個人都要為每一個對端各上傳一份,第九個人進來等於要大家各送八份)。門檻是 `warroomlive.media.mesh-max-peers`(預設 8,設 0 表示一律走 SFU)。
 - **切換是單向的,直到房間清空為止**。掉回 8 人不會切回 mesh:換傳輸方式要所有人重新協商一次,在門檻附近進出的房間會整場都在拆了重建。這個閂鎖存在 `Backplane.RoomState.sfu`,只會從未設定變成設定(所以不需要自己的原子性),房間空掉時跟著房間狀態一起消失。
 - **中途跨過門檻的房間會被通知**。用的是既有的 `room-state` ——它本來就會發給每個加入者、也會在每次變更時重播,而傳輸方式正好就是「每個加入者都要知道、改變時每個人都要被告知」的東西。前端收到就把 `WebRtcRoom` 換成 `SfuRoom`,**信令 socket 和本地 stream 都沿用**,所以聊天、筆記、議程、字幕在切換期間完全不中斷;使用者看到的是視訊格閃一下,而不是重新連線。
 - 後端 `/api/media/config?room=X` 回答**那個房間**現在走哪一種,前端據此建立對應的 `MediaRoom`;未部署 SFU 時一律 mesh,這也是為什麼硬上限存在。
-- 後端 `/api/media/token` 以 API secret 簽發**限單一房間**的 LiveKit access token(HS256 video grant);secret 不出伺服器。啟用 `oidc` profile 時此端點自動要求登入。
+- 後端 `/api/media/token` 只在信令伺服器已接受該 peer 加入房間後，才以 API secret 簽發**限單一房間**的 LiveKit access token(HS256 video grant)；OIDC 模式還會要求 peer 綁定的 subject 等於 HTTP caller，顯示名稱取自伺服器的房間目錄而非 request。secret 不出伺服器。
 - LiveKit 信令 WebSocket 由 nginx 代理在同 origin 的 `/livekit`;媒體(SRTP)直接走 SFU 的 RTC 埠(7881/tcp、7882/udp)。瀏覽器無法直達容器網路的環境(macOS/Windows 或對外部署)請在 `infrastructure/livekit/livekit.yaml` 設 `rtc.node_ip`。
 - 房間人數上限(信令層)在此模式放寬到 50;聊天、筆記、表情、舉手等仍走原本的 signaling WebSocket,完全不受媒體傳輸方式影響。
 
-## 即時字幕、逐字稿與重點摘要(字幕免疊加層;翻譯與摘要需要 AI 疊加層)
+## 即時字幕、逐字稿與重點摘要(字幕免功能;翻譯與摘要需要 `AI` 功能)
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.ai.yml up --build
+./stack.sh up ai --build
 ```
 
 - **語音辨識在瀏覽器裡跑**,不在伺服器。麥克風本來就開在那裡;把音訊再送一份到伺服器等於在既有的媒體平面旁邊,把每個人的上行流量再翻一倍,還要多養一條即時管線。代價講清楚:這是 Chrome 系的 API,Firefox 和 Safari **看得到字幕但產不出字幕**,所以偵測不到就不顯示那顆按鈕——一個按了沒反應的按鈕比沒有按鈕更糟。
@@ -119,26 +122,26 @@ docker compose -f docker-compose.yml -f docker-compose.ai.yml up --build
 - **中英文永遠一起顯示,固定中文在上**。沒有人需要切換:這是跨部門房間,兩種語言各有一半的人在讀,所以每個人都看到兩行。順序固定,是因為「原文在上」會讓這一句中文在上、下一句英文在上,同一段對話裡上下互換;固定了,眼睛才學得會該往哪看。語言選單只代表一件事——**你說話的語言**——不再兼任「你想讀哪種」。翻譯那一行同字級、只稍微安靜一點:兩行都在被讀,不能讓強調隨著誰在講話而翻面,但看得出哪一行是機器寫的——翻譯偶爾是錯的,看得到原文的房間才抓得到。
 - **重點摘要只做一次,然後留著**。同一場會議問第二次拿到的是第一次的答案(要重做得明講 `?regenerate=true`):它要花一次模型呼叫,讀的次數遠多於做的次數,而且**再問一次會得到一份不一樣的摘要**——會變的東西不叫紀錄。固定 重點 / 決議 / 待辦 三段,**用這場會議實際講得比較多的那個語言寫**(摘要是要引述回給在場的人看的)。句數太少直接回 422,而不是硬生一份看起來像紀錄的東西。
 - **待辦是「提供」給清單,不是自動塞進去**。模型讀出來的「這個好像該有人看一下」不是任何人做過的承諾,一份會自己填滿房間任務清單的摘要,只會讓大家不再相信那份清單。按下「加入待辦」走的是議程本來那條**一行輸入**的文法,所以 `@負責人` 是用一直以來處理負責人的那條路徑進去的。
-- 預設(沒有 AI 疊加層)字幕與逐字稿照常運作,只是不翻譯、也不能產摘要,而且 `/api/captions/config` 會**直說**——最糟的情況是介面暗示逐字稿正在累積、實際上什麼都沒寫下來。翻譯與摘要走 OpenAI chat-completions 線路格式,所以 `AI_BASE_URL` 指向 OpenAI、Azure、或自家網內的 Ollama / vLLM / LiteLLM 都可以;對一份逐字稿來說,「模型在我們自己的網路裡」常常是唯一能接受的答案。
+- 預設(沒有 `AI` 功能)字幕與逐字稿照常運作,只是不翻譯、也不能產摘要,而且 `/api/captions/config` 會**直說**——最糟的情況是介面暗示逐字稿正在累積、實際上什麼都沒寫下來。翻譯與摘要走 OpenAI chat-completions 線路格式,所以 `AI_BASE_URL` 指向 OpenAI、Azure、或自家網內的 Ollama / vLLM / LiteLLM 都可以;對一份逐字稿來說,「模型在我們自己的網路裡」常常是唯一能接受的答案。
 
-## 會議錄影(選用疊加層,疊在 SFU 之上)
+## 會議錄影(選用功能,會自動帶上 sfu)
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.sfu.yml -f docker-compose.recording.yml up --build
+./stack.sh up sfu recording --build
 ```
 
-- 房間內(SFU 模式)出現「錄影」按鈕:後端呼叫 **LiveKit Egress** 的 twirp API 啟動 room-composite 錄影(headless Chrome 合成畫面),MP4 直接上傳 **MinIO**(S3 API,bucket `recordings`);LiveKit secret 與儲存憑證都不出後端。離開房間時自動停止。
+- 房間內(SFU 模式)出現「錄影」按鈕：只有伺服器確認的當前主持人能啟動；回傳的短效控制 capability 綁定 room、Egress id 與主持人，停止時再次驗證，且放在 POST body 而不是 URL。後端呼叫 **LiveKit Egress** 的 twirp API 啟動 room-composite 錄影(headless Chrome 合成畫面)，MP4 直接上傳 **MinIO**(S3 API,bucket `recordings`)；LiveKit secret 與儲存憑證都不出後端。離開房間時自動停止。
 - **錄影清單與播放**:錄完的影片會列在房間側邊(時間、長度、大小),點播放即在頁面內播。播放走**預簽 URL**——資料庫只存物件 key,每次點播放才即時簽發一條 30 分鐘有效的連結,物件儲存的憑證永遠不出後端,影音位元組也不經過後端(nginx 直接把請求轉給物件儲存)。webhook 寫入的錄影列與事件同交易提交,重送不會產生重複。
-- **完成通知走 webhook**:LiveKit 以「body 雜湊 JWT」簽名回呼 `/api/livekit/webhook`(後端驗簽),搭配 events 疊加層時轉成 `meeting.recording.completed` 事件進骨幹。
+- **完成通知走 webhook**:LiveKit 以「body 雜湊 JWT」簽名回呼 `/api/livekit/webhook`(後端驗簽),搭配 `events` 功能時轉成 `meeting.recording.completed` 事件進骨幹。
 - **刪除**:清單上每筆有刪除鍵(兩段式確認,不用會卡住整頁的 `confirm()`)。`DELETE /api/recordings/{room}/{id}` **先刪物件、再刪列**——物件刪不掉就把列留著等重試,反過來會留下沒人指得到的檔案。刪除會發 `meeting.recording.deleted` 事件,帶 `reason` 與 `actor`(有登入時是 JWT subject)。
 - **會議領域**(`postgres` profile 自動啟用):第一人加入開啟 `meetings` 列、最後一人離開關閉(含時長與人數峰值);`meeting.started` / `meeting.ended` 與列同交易寫入 outbox。`Backplane.tryRegister/unregister` 回傳叢集人數,多節點下「第一人/最後一人」判定也精準。房間額滿的拒絕會發 `participant.rejected` 事件(權限類稽核)。
 
-## OIDC 認證(選用疊加層)
+## OIDC 認證(選用功能)
 
 預設 stack 不需登入(零依賴開發體驗)。要求登入才能進房與共編:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.oidc.yml up --build
+./stack.sh up oidc --build
 # 開啟 http://localhost:8088 → 會先看到登入頁(測試帳號 alice/alice123、bob/bob123)
 ```
 
@@ -148,21 +151,22 @@ docker compose -f docker-compose.yml -f docker-compose.oidc.yml up --build
 - **devidp** 是隨附的**僅供開發** IdP(固定測試帳號、記憶體金鑰),掛在同一 origin 的 `/auth` 之下。整個系統只講標準 OIDC(discovery + JWKS)——正式環境把 `OIDC_ISSUER` / `OIDC_JWK_SET_URI` / `OIDC_CLIENT_ID` 指向 Keycloak / Entra ID 等真正的 IdP 即可(例如 Keycloak 以 `KC_HTTP_RELATIVE_PATH=/auth` 掛同路徑),移除 devidp 服務。
 - 換網域/埠時設 `PUBLIC_ORIGIN`(預設 `http://localhost:8088`),JWT 的 `iss` 與前端 authority 都由它導出。
 - **Token 生命週期**:devidp 發 refresh token(單次使用、每次輪替),前端 `automaticSilentRenew` 在到期前自動換新;後端在 WS 握手時記下 token 到期時間,**逐訊息檢查**——過期連線以 close code `4401` 切斷,client 需以新 token 重連。長連線不會比憑證活得久。
+- **房間資源 ACL**：OIDC caller 必須同時是 backplane 中的即時房間成員，才能讀寫該房間的錄影、檔案、逐字稿、摘要、會議、待辦與行事曆；刪除與錄影控制再加主持人檢查。空房或缺少 subject 時一律 fail-closed。尚未有持久跨房間 ACL，因此登入模式不提供全域訊息搜尋。
 
-## TURN fallback(選用疊加層)
+## TURN fallback(選用功能)
 
 嚴格 NAT / 企業網路擋 UDP 直連時,mesh 通話可退到 coturn 中繼:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.turn.yml up --build
+./stack.sh up turn --build
 ```
 
-後端把 relay 加進 `/api/media/config` 的 `iceServers`(`TURN_URLS` / `TURN_USERNAME` / `TURN_PASSWORD` 環境變數驅動,三者齊備才啟用;STUN 預設仍在)。瀏覽器 ICE 自動在直連失敗時改走 relay。對外部署時設 `TURN_PUBLIC_HOST` 為瀏覽器可達的位址,並更換預設帳密。SFU 模式的 ICE 由 LiveKit 自管,此疊加層針對 mesh 路徑。
+後端把 relay 加進 `/api/media/config` 的 `iceServers`(`TURN_URLS` / `TURN_USERNAME` / `TURN_PASSWORD` 環境變數驅動,三者齊備才啟用;STUN 預設仍在)。瀏覽器 ICE 自動在直連失敗時改走 relay。對外部署時設 `TURN_PUBLIC_HOST` 為瀏覽器可達的位址,並更換預設帳密。SFU 模式的 ICE 由 LiveKit 自管,此功能針對 mesh 路徑。
 
-## 水平擴展(選用疊加層):多節點信令 + 多實例協作
+## 水平擴展(選用功能):多節點信令 + 多實例協作
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.scale.yml up --build
+./stack.sh up scale --build
 # backend x2 + collab x2,經 Redis 共享房間與文件
 ```
 
@@ -172,43 +176,42 @@ docker compose -f docker-compose.yml -f docker-compose.scale.yml up --build
 - **nginx 輪詢**:`/api`、`/ws`、`/ws/doc` 皆改為請求時 DNS 解析,docker DNS 將新連線輪流導向各副本;WebSocket 連線建立後黏在該副本上。
 - **房間上限為原子判斷**:單機以 per-room `compute` 序列化、叢集以 Redis Lua script(計數 + 條件寫入一步完成),多節點同時加入也不會超額。
 
-## Redis 高可用(選用疊加層,疊在水平擴展之上):Sentinel 自動故障轉移
+## Redis 高可用(選用功能,會自動帶上 scale):Sentinel 自動故障轉移
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.scale.yml \
-  -f docker-compose.ha.yml up --build
+./stack.sh up ha -- --build
 # Redis master + replica + 3 Sentinel(quorum 2);殺掉 master 約 5–15 秒自動升級
 ```
 
-- **拓撲**:`redis`(初始 master)+ `redis-replica` + `sentinel-1/2/3`(`infrastructure/redis/sentinel.conf`,`down-after 5s`、`failover-timeout 15s`,hostname 模式)。單靠 scale 疊加層時 Redis 是單點,此疊加層補上這一塊。
+- **拓撲**:`redis`(初始 master)+ `redis-replica` + `sentinel-1/2/3`(`infrastructure/redis/sentinel.conf`,`down-after 5s`、`failover-timeout 15s`,hostname 模式)。單靠 `scale` 功能時 Redis 是單點,此功能補上這一塊。
 - **後端(Lettuce)**:`redisha` profile(`application-redisha.yml`)改用 `spring.data.redis.sentinel.*`,透過 Sentinel 詢問當前 master,故障轉移後自動跟隨新 master;信令、房間目錄、心跳不需重啟即恢復。
 - **collab(ioredis)**:`REDIS_SENTINEL_NODES` 設定後 `extension-redis` 改走 Sentinel 連線,CRDT 跨實例同步同樣自動跟隨。
 - **演練**:`sh tests/ha/failover-drill.sh`(先 `npm --prefix tests/ha ci`)— 建立跨節點聊天與 CRDT 基線 → `docker kill` master → 驗證 Sentinel 升級 replica、既有連線恢復、新加入與 CRDT 同步全部繼續;演練後 `up -d` 會把舊 master 以 replica 身分接回。
 
-## 事件骨幹(選用疊加層):Transactional Outbox + Redpanda
+## 事件骨幹(選用功能):Transactional Outbox + Redpanda
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.events.yml up --build
+./stack.sh up events --build
 ```
 
 - 後端加上 `kafka` profile(需搭配 `postgres`):聊天訊息與其 `chat.message.created` 事件**在同一筆交易**寫入(`outbox_events` 表,V3 遷移),`OutboxPublisher` 每秒輪詢未發布列(`FOR UPDATE SKIP LOCKED`,多副本可並行不重工)推送到 Kafka 相容的 Redpanda(主題 `warroom.events`)。
 - 語義為 **at-least-once**:broker 斷線只會累積 backlog(Prometheus 指標 `warroomlive_events_backlog`),恢復後按序補發;消費端須以信封中的 `eventId` 去重。信封含 `eventId` / `eventType` / `aggregateType` / `aggregateId` / `schemaVersion` / `occurredAt` / `payload`。
 - 檢視事件:`docker compose ... exec redpanda rpk topic consume warroom.events --num 5`。
 - **事件類型**:`chat.message.created`(與訊息同交易)、`participant.joined` / `participant.left`(信令層)、`document.snapshot.created`(collab 服務在快照交易內直接寫**同一張** outbox 表,由後端 publisher 統一發布)。
-- **事件契約**:信封的 JSON Schema 在 `docs/contracts/warroom-event.schema.json`(indexer 內帶副本,CI 驗證兩檔一致);indexer 以 ajv 驗證每個信封,違反契約的訊息列為毒訊息計數後跳過。**Schema Registry**:events 疊加層開啟 Redpanda 內建的 registry(`:8081`),indexer 啟動時把內帶 schema 註冊到 subject `warroom.events-value`(相同內容不會產生新版本),之後以 registry 的 latest 版本編譯驗證器——契約的單一真實來源移到 registry,獨立演進的消費端會收斂到同一份契約;未設 `SCHEMA_REGISTRY_URL` 或 registry 不可達時退回內帶副本。
-- **消費端範例(`indexer/`)**:訂閱 `warroom.events`,以 `event_id` 主鍵冪等寫入兩個可重建的讀模型——`audit_log`(全事件稽核軌跡)與 `message_search`(訊息全文檢索,Postgres FTS + GIN;之後可換 OpenSearch)。兩個投影在同一交易提交,offset 於寫入後才提交,毒訊息計數後跳過、DB 錯誤重試。查詢:`GET /api/search/messages?q=關鍵字&room=房名`(`postgres` profile;結果來自事件管線,需 events 疊加層在跑)。
+- **事件契約**:信封的 JSON Schema 在 `docs/contracts/warroom-event.schema.json`(indexer 內帶副本,CI 驗證兩檔一致);indexer 以 ajv 驗證每個信封,違反契約的訊息列為毒訊息計數後跳過。**Schema Registry**:`events` 功能開啟 Redpanda 內建的 registry(`:8081`),indexer 啟動時把內帶 schema 註冊到 subject `warroom.events-value`(相同內容不會產生新版本),之後以 registry 的 latest 版本編譯驗證器——契約的單一真實來源移到 registry,獨立演進的消費端會收斂到同一份契約;未設 `SCHEMA_REGISTRY_URL` 或 registry 不可達時退回內帶副本。
+- **消費端範例(`indexer/`)**:訂閱 `warroom.events`,以 `event_id` 主鍵冪等寫入兩個可重建的讀模型——`audit_log`(全事件稽核軌跡)與 `message_search`(訊息全文檢索,Postgres FTS + GIN;之後可換 OpenSearch)。兩個投影在同一交易提交,offset 於寫入後才提交,毒訊息計數後跳過、DB 錯誤重試。查詢:`GET /api/search/messages?q=關鍵字&room=房名`(`postgres` profile;結果來自事件管線,需 `events` 功能在跑)。
 
-## 可觀測性(選用疊加層)
+## 可觀測性(選用功能)
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
+./stack.sh up observability --build
 # Prometheus: http://localhost:9090   Grafana(匿名 Admin): http://localhost:3000
 ```
 
-後端在 `/actuator/prometheus`(信令連線數、各類型訊息進出計數、處理耗時、房間/成員 gauge),collab 在 `/metrics`(update 計數與大小分佈、fetch/store 耗時、被拒連線計數、連線/開啟文件 gauge),indexer 在 `:9400/metrics`;與 SFU 疊加層併用時也抓 LiveKit 的 WebRTC 品質指標(`livekit:6789`)。皆不經 nginx 代理,只在 compose 網路內可達。
+後端在 `/actuator/prometheus`(信令連線數、各類型訊息進出計數、處理耗時、房間/成員 gauge),collab 在 `/metrics`(update 計數與大小分佈、fetch/store 耗時、被拒連線計數、連線/開啟文件 gauge),indexer 在 `:9400/metrics`;與 `SFU` 功能併用時也抓 LiveKit 的 WebRTC 品質指標(`livekit:6789`)。皆不經 nginx 代理,只在 compose 網路內可達。
 
-此疊加層還包含:
-- **分散式追蹤**:後端以 OTLP 送 **Tempo**(overlay 設 `TRACING_ENABLED=true`;預設關閉零成本),Grafana 已接 Tempo datasource。
+此功能還包含:
+- **分散式追蹤**:後端以 OTLP 送 **Tempo**(`observability` 功能設 `TRACING_ENABLED=true`;預設關閉零成本),Grafana 已接 Tempo datasource。
 - **Grafana dashboard**「WarRoomLive Overview」自動 provision(連線數、訊息速率、CRDT update、事件 backlog/發布率等)。
 - **告警規則**(`infrastructure/observability/alerts.yml`):scrape target down、outbox backlog 累積、collab 拒連暴增、信令處理超過 20ms SLO。
 - **告警通知路由**(`infrastructure/observability/alertmanager.yml`,`:9093`):分組(alertname + severity)、critical 走快速通道(group_wait 5s)、**抑制規則**(某 job 的 scrape target 掛掉時,壓下同 job 的 warning 告警——它們的指標本來就已失真)。開發用接收端是 `alert-logger` webhook 容器,可用 `docker compose logs alert-logger` 直接看到通知送達;正式環境只換 receivers(Slack/Email/PagerDuty),路由樹不動。
@@ -234,67 +237,66 @@ tests/ui/run.sh --all            # 再加上會重啟後端的 reconnect
 
 **分層原則**:純邏輯與策略(重連的關閉碼規則、品質門檻與遲滯、主持人限定的介面)寫成單元測試進 CI;需要跑起來的 stack 才能驗的走 `tests/e2e/`;只有真實瀏覽器能回答的問題(聲音是否真的出得來、編輯器是否真的接上文件、控制項是否只給對的人)走 `tests/ui/`。詳見各自的 README。
 
-所有套件都經由 nginx 單一入口(`:8088`)操作,和瀏覽器走同一條路徑,因此代理路由、profile 接線與疊加層拓撲都在測試範圍內。`run.sh` 依「目前實際在跑什麼」挑套件,所以同一行指令在基本 stack 與任何疊加層組合上都適用:
+所有套件都經由 nginx 單一入口(`:8088`)操作,和瀏覽器走同一條路徑,因此代理路由、profile 接線與功能拓撲都在測試範圍內。`run.sh` 依「目前實際在跑什麼」挑套件,所以同一行指令在基本 stack 與任何功能組合上都適用:
 
 | 套件 | 需要 | 涵蓋 |
 |---|---|---|
 | `signaling` / `room-acl` / `crdt` / `capacity` | 任何 stack | 信令與成員事件、房間權限(主持人/鎖房/踢人)、CRDT 收斂、房間上限的原子性 |
 | `limits` | 任何 stack | 三個平面的濫用防護:聊天長度、訊框上限、信令與 HTTP 的 token bucket(429 + Retry-After、健康檢查豁免、退讓後恢復)|
 | `retention` | 任何 stack | 過期資料被刪、**新資料與未發布的 outbox 列必須活著**;有物件儲存時連 MP4 一起刪 |
-| `recordings` | recording 疊加層 | webhook → 列 → 清單分頁 → 預簽播放 → 刪除(列與物件一起消失)|
-| `oidc` / `token-lifecycle` | oidc 疊加層 | 兩個 WS 平面的認證強制;refresh 輪替與 token 過期後 4401 斷線 |
-| `events` | events 疊加層 | 活動 → outbox → Redpanda → indexer → 讀模型 → 搜尋 API,以及重放去重 |
+| `recordings` | `recording` 功能 | webhook → 列 → 清單分頁 → 預簽播放 → 刪除(列與物件一起消失)|
+| `oidc` / `token-lifecycle` | `oidc` 功能 | 兩個 WS 平面的認證強制;refresh 輪替與 token 過期後 4401 斷線 |
+| `events` | `events` 功能 | 活動 → outbox → Redpanda → indexer → 讀模型 → 搜尋 API,以及重放去重 |
 | `crdt-hardening` / `scale` | 破壞性 | 快照前崩潰的耐久性、超大更新拒絕與壓縮;跨 collab 副本收斂與節點死亡後的 ghost 清理 |
 | `reconnect` | 任何 stack | 重連的伺服器端契約:突然斷線的廣播、重新加入不重複、被取代的 session 遲到的 close 不得踢掉活著的連線 |
 
 瀏覽器層套件(`tests/ui/`):`media`(聲音是否真的播出來)、`collab`(筆記與白板同步)、`room-acl`(主持人限定介面、被踢者不得被重連帶回)、`quality`(品質指示)、`reconnect`(重啟後端後完整恢復)。詳細說明見 `tests/e2e/README.md` 與 `tests/ui/README.md`。
 
-## 備份、DR 與壓測(選用疊加層 + 手動套件)
+## 備份、DR 與壓測(選用功能 + 手動套件)
 
 ```bash
 # WAL 歸檔 + PITR 還原演練
-docker compose -f docker-compose.yml -f docker-compose.backup.yml up -d
+./stack.sh up backup -d
 tests/dr/restore-drill.sh
 
 # 再疊上物件儲存歸檔(加密)後,改跑「只從 bucket 還原」的演練
-docker compose -f docker-compose.yml -f docker-compose.backup.yml \
-  -f docker-compose.backup-s3.yml up -d
+./stack.sh up backup-s3 -- -d
 tests/dr/restore-s3-drill.sh
 ```
 
-- **備份與 DR**:backup 疊加層開 WAL 歸檔;backup-s3 疊加層再以 rclone `crypt` remote 把基礎備份與 WAL **客戶端加密**後同步進 MinIO(連檔名都是密文),還原演練完全只靠 bucket。詳見 `docs/runbooks/disaster-recovery.md`。
+- **備份與 DR**:`backup` 功能開 WAL 歸檔;`backup-s3` 功能再以 rclone `crypt` remote 把基礎備份與 WAL **客戶端加密**後同步進 MinIO(連檔名都是密文),還原演練完全只靠 bucket。詳見 `docs/runbooks/disaster-recovery.md`。
 - **壓測**:`tests/load/`(k6 信令 SLO 壓測、`crdt-replay.mjs` CRDT 冷重建基準、`rtc-load.sh` LiveKit 媒體壓測)與 `tests/chaos/`(Toxiproxy)。實測數字與抓到的缺陷記在 `docs/runbooks/load-testing.md`。
-- **Redis 故障轉移演練**:`tests/ha/failover-drill.sh`(見上方 HA 疊加層)。
+- **Redis 故障轉移演練**:`tests/ha/failover-drill.sh`(見上方 `HA` 功能)。
 
 以上皆不在 CI 跑,需對著實際跑起來的 stack 手動執行。
 
 ## 部署到已經有其他站台的機器
 
-機器上 `:80`/`:443` 已經被別的站台的 reverse proxy 佔著時,用 `docker-compose.prod.yml`
-而**不是** TLS 疊加層——後者會自己起一個 Caddy 綁那兩個 port,直接相撞。
+機器上 `:80`/`:443` 已經被別的站台的 reverse proxy 佔著時,用 `prod` 功能
+而**不是** `TLS` 功能——後者會自己起一個 Caddy 綁那兩個 port,直接相撞。
 
 ```bash
 cp .env.prod.example .env.prod && chmod 600 .env.prod   # DB_PASSWORD 必填
-docker compose --env-file .env.prod \
-  -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+set -a && . ./.env.prod && set +a
+./stack.sh up prod -d --build
 ```
 
 - frontend **只綁 loopback**,由既有的 edge 轉進來;`infrastructure/edge/` 有 Caddy 與 nginx 兩份 site 設定可以直接抄。
 - 少了 `DB_PASSWORD` 或 `PUBLIC_ORIGIN` 會**拒絕啟動**——這個 repo 到處是開發用預設密碼,用預設值跑在公開位址上不該因為「忘了」而發生。
-- **多一層 proxy 會打壞 REST 限流**:後端取 `X-Forwarded-For` 的最後一段(單層拓撲下那是唯一偽造不了的),多一跳之後那段變成 edge 的位址,全世界共用一個額度。這個疊加層會掛上 `infrastructure/edge/real-ip.conf` 修正,runbook 裡有驗證指令。
+- **多一層 proxy 會打壞 REST 限流**:後端取 `X-Forwarded-For` 的最後一段(單層拓撲下那是唯一偽造不了的),多一跳之後那段變成 edge 的位址,全世界共用一個額度。這個功能會掛上 `infrastructure/edge/real-ip.conf` 修正,runbook 裡有驗證指令。
 - **媒體不走 edge**(SRTP/UDP,proxy 代理不了):mesh 不需要額外開 port,TURN 與 SFU 需要。
 
 完整步驟(DNS、憑證、防火牆、升級、備份)見 [`docs/runbooks/deployment.md`](docs/runbooks/deployment.md)。
 
 ## 正式對外:HTTPS(TLS 反向代理,WarRoomLive 獨佔整台機器時)
 
-用 Caddy 當邊緣代理,自動取得憑證。這是**選用的疊加層**(`docker-compose.tls.yml`),不影響上面的簡易部署。
+用 Caddy 當邊緣代理,自動取得憑證。這是**選用的功能**(`tls`),不影響上面的簡易部署。
 
 **正式環境**(真實網域,自動 Let's Encrypt,需 80/443 對外可達):
 
 ```bash
 SITE_ADDRESS=warroom.example.com \
-  docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+  ./stack.sh up tls -d --build
 # 開啟 https://warroom.example.com
 ```
 
@@ -302,11 +304,11 @@ SITE_ADDRESS=warroom.example.com \
 
 ```bash
 HTTP_PORT=8081 HTTPS_PORT=8443 \
-  docker compose -f docker-compose.yml -f docker-compose.tls.yml up --build
+  ./stack.sh up tls --build
 # 開啟 https://localhost:8443
 ```
 
-啟用 TLS 疊加層後,前端不再直接對外(由 Caddy 終結 TLS 再轉給 nginx);頁面走 HTTPS 時,WebSocket 會自動使用 `wss`。對外公開時記得把 `WARROOMLIVE_SIGNALING_ALLOWED_ORIGINS` 收斂成實際網域。
+啟用 `TLS` 功能後,前端不再直接對外(由 Caddy 終結 TLS 再轉給 nginx);頁面走 HTTPS 時,WebSocket 會自動使用 `wss`。對外公開時記得把 `WARROOMLIVE_SIGNALING_ALLOWED_ORIGINS` 收斂成實際網域。
 
 ## 使用 PostgreSQL 持久化(選用,直接跑後端)
 

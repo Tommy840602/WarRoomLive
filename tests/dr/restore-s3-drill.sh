@@ -1,15 +1,15 @@
 #!/usr/bin/env sh
-# PITR drill restoring EXCLUSIVELY from object storage (backup-s3 overlay):
+# PITR drill restoring EXCLUSIVELY from object storage (`backup-s3` feature):
 # same shape as restore-drill.sh, but the restore container never touches the
 # backups volume — base backup + WAL are pulled (and decrypted) from the MinIO
 # bucket into a scratch volume first. Proves the encrypted bucket alone is
 # sufficient to recover to a point in time.
 #
-# Prereqs: backup + backup-s3 overlays up; `npm --prefix tests/dr ci` once.
+# Prereqs: `./stack.sh up backup-s3 -d`; `npm --prefix tests/dr ci` once.
 set -eu
 cd "$(dirname "$0")/../.."
 
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.backup.yml -f docker-compose.backup-s3.yml"
+COMPOSE="docker compose -f docker-compose.yml --profile backup-s3 --profile backup-s3-dev"
 PROJECT=${PROJECT:-warroomlive}
 NETWORK=${NETWORK:-${PROJECT}_default}
 RESTORE=warroomlive-s3-restore-drill
@@ -17,7 +17,7 @@ SCRATCH_VOL=${PROJECT}_s3-restore-scratch
 RUN=$(date +%s)
 export DR_ROOM="drs3-$RUN"
 
-# The same rclone remote config the shipper uses (dev creds of the overlay).
+# The same rclone remote config the shipper uses (local fixture credentials).
 RCLONE_ENV="-e RCLONE_CONFIG_S3_TYPE=s3 -e RCLONE_CONFIG_S3_PROVIDER=Minio \
   -e RCLONE_CONFIG_S3_ENDPOINT=http://minio-backup:9000 \
   -e RCLONE_CONFIG_S3_ACCESS_KEY_ID=warroom -e RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=warroomsecret \
@@ -27,7 +27,7 @@ PASS=${BACKUP_PASSPHRASE:-warroom-dev-backup-passphrase}
 psql_src() { $COMPOSE exec -T db psql -U warroomlive -d warroomlive -tAc "$1"; }
 psql_restored() { docker exec "$RESTORE" psql -U warroomlive -d warroomlive -tAc "$1"; }
 ship_now() {
-  docker compose -f docker-compose.yml -f docker-compose.backup.yml -f docker-compose.backup-s3.yml \
+  docker compose -f docker-compose.yml --profile backup-s3 --profile backup-s3-dev \
     exec -T backup-shipper sh -c \
     'RCLONE_CONFIG_CRYPT_PASSWORD=$(rclone obscure "$BACKUP_PASSPHRASE") rclone sync /backups crypt: --exclude "restore-stage/**" --create-empty-src-dirs -q'
 }

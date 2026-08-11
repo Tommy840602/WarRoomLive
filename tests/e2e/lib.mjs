@@ -98,34 +98,59 @@ export async function until(label, pred, ms = 10000, step = 100) {
 /**
  * `docker compose` for the stack that is actually running.
  *
- * <p>This used to be "the base file plus whatever overlays the caller names",
- * which is a different and NARROWER view of the project whenever the stack was
- * started with more of them. That matters because these commands are not all
- * read-only: `docker compose run` reconciles services against the config it is
- * given, so a suite invoking it with base-only silently recreated collab and
- * the backend without their overlay environment — and everything downstream of
- * that env stopped working for the rest of the session, with nothing logged.
+ * <p>There is one compose file now, so this is about PROFILES rather than
+ * `-f` flags: a command issued without the profiles the stack was started with
+ * describes a smaller project than the one running, and these commands are not
+ * all read-only — `docker compose run` reconciles services to the config it is
+ * given. That is how a sweeper once recreated collab without the events
+ * feature's environment and silently stopped snapshot events for a whole
+ * session, with nothing logged.
  *
  * <p>So when `stack.sh up` has recorded what it started, that wins. The named
- * overlays remain the fallback for a stack brought up by hand.
+ * features are the fallback for a stack brought up by hand.
  */
-export function compose(...overlays) {
-  const recorded = readStackFiles()
-  if (recorded) return `docker compose ${recorded}`
-  const files = ['docker-compose.yml', ...overlays.map((o) => `docker-compose.${o}.yml`)]
-  return `docker compose ${files.map((f) => `-f ${REPO_ROOT}${f}`).join(' ')}`
+export function compose(...features) {
+  const base = `docker compose -f ${REPO_ROOT}docker-compose.yml`
+  const recorded = readStackProfiles()
+  if (recorded !== null) return `${base} ${recorded}`.trim()
+  return `${base} ${features.map((f) => `--profile ${f}`).join(' ')}`.trim()
 }
 
-/** The `-f` flags `stack.sh up` recorded, absolute-path'd, or null. */
-function readStackFiles() {
+/**
+ * Loads the feature environment `stack.sh up` recorded, once, at import.
+ *
+ * <p>Without this every `docker compose` a suite shells out to describes a
+ * DIFFERENT stack: the profiles come from `.stack.env` but the variables that
+ * switch each feature on do not, so `EVENTS_ENABLED` and friends fall back to
+ * their "off" defaults. Compose then sees a changed configuration and recreates
+ * the service to match — collab came back with events disabled in the middle of
+ * a suite run, and `document.snapshot.created` stopped being written with
+ * nothing logged anywhere.
+ *
+ * <p>The overlay model hid this: a file list is self-describing, so replaying it
+ * reproduced the same config. A set of environment variables is not, which is
+ * the one real edge the old model had and the reason this exists.
+ *
+ * <p>Existing values win, so a suite can still override a single variable.
+ */
+function loadStackEnv() {
+  try {
+    for (const line of readFileSync(`${REPO_ROOT}.stack.env`, 'utf8').split('\n')) {
+      const match = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/)
+      if (match && process.env[match[1]] === undefined) process.env[match[1]] = match[2]
+    }
+  } catch {
+    // No recorded stack: the suites are running against one brought up by hand.
+  }
+}
+loadStackEnv()
+
+/** The `--profile` flags `stack.sh up` recorded, or null if it never ran. */
+function readStackProfiles() {
   try {
     const raw = readFileSync(`${REPO_ROOT}.stack.env`, 'utf8')
-    const match = raw.match(/WARROOM_COMPOSE_FILES='([^']*)'/)
-    if (!match) return null
-    return match[1]
-      .split(/\s+/)
-      .map((part) => (part === '-f' ? part : `${REPO_ROOT}${part}`))
-      .join(' ')
+    const match = raw.match(/WARROOM_PROFILE_ARGS='([^']*)'/)
+    return match ? match[1] : null
   } catch {
     return null
   }

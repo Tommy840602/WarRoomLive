@@ -1,8 +1,8 @@
 // Shared files: upload straight to the object store, list, download, delete.
-// Needs the sfu + recording overlays (they bring the object store this reuses).
+// Needs the recording feature (it brings the object store this reuses, and pulls
+// in sfu).
 //
-//   docker compose -f docker-compose.yml -f docker-compose.sfu.yml \
-//     -f docker-compose.recording.yml up -d
+//   ./stack.sh up recording --build
 //   tests/e2e/run.sh attachments
 //
 // The interesting property is that the backend never sees a file byte: the

@@ -37,12 +37,15 @@ public class CaptionController {
     private final ObjectProvider<TranscriptStore> transcripts;
     private final ObjectProvider<Translator> translator;
     private final ObjectProvider<Summarizer> summarizer;
+    private final RoomAuthorization authorization;
 
     public CaptionController(ObjectProvider<TranscriptStore> transcripts,
-            ObjectProvider<Translator> translator, ObjectProvider<Summarizer> summarizer) {
+            ObjectProvider<Translator> translator, ObjectProvider<Summarizer> summarizer,
+            RoomAuthorization authorization) {
         this.transcripts = transcripts;
         this.translator = translator;
         this.summarizer = summarizer;
+        this.authorization = authorization;
     }
 
     @GetMapping("/config")
@@ -77,6 +80,7 @@ public class CaptionController {
     @GetMapping("/{room}")
     public List<Map<String, Object>> tail(@PathVariable String room,
             @RequestParam(defaultValue = "" + DEFAULT_LIMIT) int limit) {
+        authorization.requireRoomMember(room, "read transcripts");
         return store().tail(room, Pages.limit(limit, DEFAULT_LIMIT, MAX_LIMIT)).stream()
                 .map(CaptionController::describe)
                 .toList();

@@ -77,6 +77,7 @@ public class CalendarController {
             @RequestParam(required = false) String from,
             @RequestParam(defaultValue = "" + DEFAULT_LIMIT) int limit,
             @RequestParam(defaultValue = "0") int offset) {
+        authorization.requireRoomMember(room, "list agenda items");
         Instant since = from == null || from.isBlank()
                 ? Instant.now() : TodoController.parseInstant(from, "from");
         return store()
@@ -87,6 +88,7 @@ public class CalendarController {
 
     @PostMapping("/{room}")
     public Map<String, Object> create(@PathVariable String room, @RequestBody CreateRequest request) {
+        authorization.requireRoomMember(room, "create agenda items");
         String title = require(request.title(), MAX_TITLE, "title");
         Instant startsAt = TodoController.parseInstant(request.startsAt(), "startsAt");
         if (startsAt == null) {
@@ -105,6 +107,7 @@ public class CalendarController {
     @PatchMapping("/{room}/{id}")
     public Map<String, Object> update(@PathVariable String room, @PathVariable long id,
             @RequestBody UpdateRequest request) {
+        authorization.requireRoomMember(room, "update agenda items");
         CalendarEventEntity current = store().byId(room, id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "no such event"));
 

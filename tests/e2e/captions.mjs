@@ -2,7 +2,7 @@
 //
 // Needs the ai overlay for the translation and summary halves:
 //
-//   docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d --build
+//   ./stack.sh up ai -- -d --build
 //   tests/e2e/run.sh captions
 //
 // Without it the first half still passes and the rest is skipped — that is the

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Backup shipper (backup-s3 overlay): continuously syncs the backups volume
+# Backup shipper (backup-s3 feature): continuously syncs the backups volume
 # (base backups + archived WAL) to MinIO through an rclone `crypt` remote, so
 # everything in the bucket is client-side encrypted (contents and file names)
 # with BACKUP_PASSPHRASE. Sync is incremental and idempotent; WAL segments are

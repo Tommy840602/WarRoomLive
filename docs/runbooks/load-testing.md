@@ -5,7 +5,7 @@
 ## 負載測試(`tests/load/`)
 
 ```bash
-docker compose up -d          # 任意疊加層組合
+docker compose up -d          # 任意功能組合
 tests/load/run.sh             # 預設:120 VUs、每房 4 人、每人 2 秒 1 則聊天
 VUS=400 CHAT_INTERVAL_MS=1000 HOLD=120s tests/load/run.sh   # 加壓
 ```
@@ -76,12 +76,12 @@ DB_HOST=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{
 ## RTC 媒體壓測(`tests/load/rtc-load.sh`)
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.sfu.yml up -d
+./stack.sh up sfu -d
 tests/load/rtc-load.sh 3 9 30s        # publishers subscribers duration
 ```
 
-k6 套件只涵蓋信令;這支用 `lk load-test` 打真實媒體路徑(模擬發布者與訂閱者,含 speaker 事件)。單機 compose 3 發布者 / 9 訂閱者 / 30 秒:**27/27 訂閱軌道全部建立,總計 21.5mbps(平均 2.4mbps/訂閱者),丟包 0(0%),錯誤 0**。simulcast 分層可見(同一發布者同時有 ~1.9mbps 與 ~290kbps 的軌道被訂閱),與 SFU 疊加層的 simulcast/dynacast 設定一致。跑測時可對照 observability 疊加層的 SFU 面板。
+k6 套件只涵蓋信令;這支用 `lk load-test` 打真實媒體路徑(模擬發布者與訂閱者,含 speaker 事件)。單機 compose 3 發布者 / 9 訂閱者 / 30 秒:**27/27 訂閱軌道全部建立,總計 21.5mbps(平均 2.4mbps/訂閱者),丟包 0(0%),錯誤 0**。simulcast 分層可見(同一發布者同時有 ~1.9mbps 與 ~290kbps 的軌道被訂閱),與 `SFU` 功能的 simulcast/dynacast 設定一致。跑測時可對照 `observability` 功能的 SFU 面板。
 
 ## 規模化到正式環境
 
-沙箱數字只證明「行為正確 + 單機餘裕」;正式驗收應在目標環境跑藍圖工作負載(20k 連線、500 房、5% reconnect storm、1% slow consumer),搭配 observability 疊加層觀察 `warroomlive_*` 指標與 JVM/GC,門檻不變。Redis backplane(scale 疊加層)下建議同時對兩節點壓測。
+沙箱數字只證明「行為正確 + 單機餘裕」;正式驗收應在目標環境跑藍圖工作負載(20k 連線、500 房、5% reconnect storm、1% slow consumer),搭配 `observability` 功能觀察 `warroomlive_*` 指標與 JVM/GC,門檻不變。Redis backplane(`scale` 功能)下建議同時對兩節點壓測。

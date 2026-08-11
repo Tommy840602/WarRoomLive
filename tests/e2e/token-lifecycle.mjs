@@ -1,6 +1,5 @@
-// Credential lifetime, for the oidc overlay started with a short token TTL:
-//   DEVIDP_TOKEN_TTL=25 docker compose -f docker-compose.yml \
-//     -f docker-compose.oidc.yml up -d
+// Credential lifetime, for a stack started with a short token TTL:
+//   DEVIDP_TOKEN_TTL=25 ./stack.sh up oidc -d
 //   tests/e2e/run.sh token-lifecycle
 //
 // Covers refresh-token rotation and the rule that makes long-lived sockets

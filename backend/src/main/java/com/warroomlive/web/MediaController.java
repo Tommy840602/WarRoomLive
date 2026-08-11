@@ -6,6 +6,7 @@ import com.nimbusds.jose.crypto.MACSigner;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import com.warroomlive.signaling.Backplane;
+import com.warroomlive.signaling.PeerInfo;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -40,10 +41,12 @@ public class MediaController {
     private final String apiSecret;
     private final List<Map<String, Object>> iceServers;
     private final Backplane backplane;
+    private final RoomAuthorization authorization;
     private final int meshMaxPeers;
 
     public MediaController(
             Backplane backplane,
+            RoomAuthorization authorization,
             @Value("${warroomlive.media.livekit-url:}") String livekitUrl,
             @Value("${warroomlive.media.livekit-api-key:}") String apiKey,
             @Value("${warroomlive.media.livekit-api-secret:}") String apiSecret,
@@ -53,6 +56,7 @@ public class MediaController {
             @Value("${warroomlive.media.turn-password:}") String turnPassword,
             @Value("${warroomlive.media.mesh-max-peers:8}") int meshMaxPeers) {
         this.backplane = backplane;
+        this.authorization = authorization;
         this.meshMaxPeers = meshMaxPeers;
         this.livekitUrl = livekitUrl;
         this.apiKey = apiKey;
@@ -108,20 +112,22 @@ public class MediaController {
     @GetMapping("/token")
     public Map<String, String> token(
             @RequestParam String room,
-            @RequestParam String identity,
-            @RequestParam(defaultValue = "") String name) {
+            @RequestParam String identity) {
         if (!sfuEnabled()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "SFU mode is not configured");
         }
         if (room.isBlank() || identity.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "room and identity are required");
         }
+        PeerInfo peer = authorization.requirePeer(room, identity, "request an SFU token");
         try {
             long now = System.currentTimeMillis();
             JWTClaimsSet claims = new JWTClaimsSet.Builder()
                     .issuer(apiKey)
                     .subject(identity)
-                    .claim("name", name.isBlank() ? identity : name)
+                    // The signaling join is the identity boundary: under OIDC
+                    // its name came from the provider, not this HTTP request.
+                    .claim("name", peer.name())
                     .notBeforeTime(new Date(now - 10_000))
                     .expirationTime(new Date(now + TOKEN_TTL_SECONDS * 1000))
                     .claim("video", Map.of(

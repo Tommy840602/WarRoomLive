@@ -2,8 +2,8 @@
 # each StartEgress request from the backend, not here.
 redis:
   address: redis:6379
-api_key: devkey
-api_secret: devkey_secret_needs_at_least_32_bytes
+# LIVEKIT_API_KEY / LIVEKIT_API_SECRET are injected by Compose. Keeping secrets
+# out of this file lets production use the same image and checked-in config.
 ws_url: ws://livekit:7880
 insecure: true
 log_level: info

@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Takes a physical base backup of the running stack's Postgres into the backups
 # volume (requires the backup overlay for WAL archiving to make it PITR-capable).
-#   docker compose -f docker-compose.yml -f docker-compose.backup.yml up -d
+#   ./stack.sh up backup -- -d
 #   tests/dr/backup.sh          # plain format (directory)
 #   tests/dr/backup.sh tar      # tar.gz format — one object per backup
 #
@@ -11,7 +11,9 @@
 set -eu
 cd "$(dirname "$0")/../.."
 
-COMPOSE="docker compose -f docker-compose.yml -f docker-compose.backup.yml"
+# One compose file now; `backup` has no services of its own, only settings,
+# so no profile is needed here — just the file.
+COMPOSE="./stack.sh"
 FORMAT=${1:-plain}
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 
